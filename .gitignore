@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# env
+.env
+.env.local
+.env.*.local
+
+# os
+.DS_Store
+Thumbs.db
+
+# vercel
+.vercel/
+
+# editor
+.vscode/
+*.swp
+
+# build/coverage
+dist/
+build/
+coverage/
+
+# supabase local data
+supabase/.temp/
