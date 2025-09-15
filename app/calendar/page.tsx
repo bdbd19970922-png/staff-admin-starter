@@ -206,6 +206,17 @@ export default function Page() {
         .order('full_name', { ascending: true })
         .returns<ProfileName[]>();
 
+    }
+    catch (e) {
+      // noop
+    }
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name')
+        .order('full_name', { ascending: true })
+        .returns<ProfileName[]>();
+
       if (!error && data) {
         const names = data
           .map(p => (p.full_name ?? '').trim())
@@ -647,6 +658,7 @@ function DetailModal({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false); // ✅ 삭제 진행상태
 
   const initialNames = effectiveNames(row);
 
@@ -748,6 +760,25 @@ function DetailModal({
     // Realtime 구독으로 목록/상세가 자동 갱신됨
   };
 
+  // ✅ 삭제 핸들러
+  const onDelete = async () => {
+    setErr(null);
+    const ok = typeof window !== 'undefined'
+      ? window.confirm('정말로 이 일정을 삭제할까요? 이 작업은 되돌릴 수 없습니다.')
+      : true;
+    if (!ok) return;
+
+    setDeleting(true);
+    const { error } = await supabase.from('schedules').delete().eq('id', row.id);
+    if (error) {
+      setErr(`삭제 오류: ${error.message}`);
+      setDeleting(false);
+      return;
+    }
+    setDeleting(false);
+    onClose(); // 성공 시 모달 닫기 (리얼타임으로 목록 갱신)
+  };
+
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] p-5 shadow-2xl">
@@ -789,6 +820,15 @@ function DetailModal({
             )}
 
             <div className="mt-5 flex justify-end gap-2">
+              {/* ✅ 삭제 버튼 추가 */}
+              <button
+                onClick={onDelete}
+                disabled={deleting}
+                className="btn border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                title="이 일정을 삭제합니다"
+              >
+                {deleting ? '삭제 중…' : '삭제하기'}
+              </button>
               <button onClick={() => setEditing(true)} className="btn-primary">수정하기</button>
               <button onClick={onClose} className="btn">닫기</button>
             </div>
