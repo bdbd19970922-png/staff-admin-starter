@@ -109,25 +109,45 @@ export default function Page() {
   // 검색어(추가/수정 모달용)
   const [empSearch, setEmpSearch] = useState<string>('');
   const [empEditSearch, setEmpEditSearch] = useState<string>('');
+  const [myName, setMyName] = useState<string>('');
+  /* ====== 관리자 판별 + 내 이름 로드 ====== */
+useEffect(() => {
+  (async () => {
+    const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
+      .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-  /* ====== 관리자 판별 ====== */
-  useEffect(() => {
-    (async () => {
-      const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
-        .split(',').map(s => s.trim()).filter(Boolean);
-      const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
-        .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const { data: { session } } = await supabase.auth.getSession();
+    const uid = session?.user?.id ?? '';
+    const email = (session?.user?.email ?? '').toLowerCase();
 
-      const { data: { session} } = await supabase.auth.getSession();
-      const uid = session?.user?.id ?? '';
-      const email = (session?.user?.email ?? '').toLowerCase();
+    // 1) 환경변수 관리자
+    let elevated =
+      (!!uid && adminIds.includes(uid)) ||
+      (!!email && adminEmails.includes(email));
 
-      setIsAdmin(
-        (!!uid && adminIds.includes(uid)) ||
-        (!!email && adminEmails.includes(email))
-      );
-    })();
-  }, []);
+    // 2) 프로필 기반 관리자/매니저 & 내 이름
+    if (uid) {
+      const { data: me } = await supabase
+        .from('profiles')
+        .select('full_name, is_admin, is_manager')
+        .eq('id', uid)
+        .maybeSingle();
+
+      if (me?.is_admin || me?.is_manager) elevated = true;
+
+      // 🔑 내 이름을 반드시 저장 (프런트 필터용)
+      const fallback = (session?.user?.email?.split('@')[0] ?? '').trim();
+      setMyName(((me?.full_name ?? '') || fallback).trim());
+    } else {
+      setMyName((session?.user?.email?.split('@')[0] ?? '').trim());
+    }
+
+    setIsAdmin(!!elevated); // 매니저도 관리자처럼 취급
+  })();
+}, []);
+
 
   /* ====== 달력 범위 ====== */
   const monthStart = startOfMonth(baseDate);
@@ -135,41 +155,64 @@ export default function Page() {
   const gridStart  = startOfWeek(monthStart);
   const gridEnd    = endOfWeek(monthEnd);
 
-  /* ====== 데이터 로드 ====== */
+    /* ====== 데이터 로드 (권한/내이름 기반 서버측 필터 적용) ====== */
   const load = async () => {
     setLoading(true);
     setMsg(null);
 
     try {
+      // 직원/일반 모드에서 내 이름 필요
+      const me = (myName ?? '').trim();
+
+      // 직원 모드인데 아직 내 이름을 못 가져온 상태면 불러오지 않음
+      if (!isAdmin && !me) {
+        setRows([]);
+        setLoading(false);
+        return;
+      }
+
       // 1) 스케줄 로드 (신규 컬럼 우선 시도)
       const sel1 =
         'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
 
-      // ✅ 읽기는 뷰 사용: 관리자면 실값, 비관리자면 DB가 자동 마스킹(NULL)
-      let { data, error } = await supabase
+      // 기본 쿼리: 뷰에서 읽기
+      let query = supabase
         .from('schedules_secure')
         .select(sel1)
-        .order('start_ts', { ascending: true })
-        .returns<Row[]>();
+        .order('start_ts', { ascending: true });
+
+      // ✅ 직원(비관리자)인 경우 서버단에서 "내 이름 포함 일정"만 가져오기
+      if (!isAdmin) {
+        const esc = me.replace(/([{}%,])/g, ''); // 간단 이스케이프
+        query = query.or(`employee_names.cs.{${esc}},employee_name.ilike.%${esc}%`);
+      }
+
+      let { data, error } = await query.returns<Row[]>();
 
       if (error) {
-        // 2차: 안전 컬럼만 (여기도 뷰 유지)
+        // 2차: 안전 컬럼만
         setHasFinanceCols(false);
         setSupportsMultiEmp(false);
         setSupportsOff(false);
 
         const sel2 =
           'id,title,start_ts,end_ts,employee_id,employee_name,customer_name,customer_phone,site_address';
-        const fallback = await supabase
+
+        let q2 = supabase
           .from('schedules_secure')
           .select(sel2)
-          .order('start_ts', { ascending: true })
-          .returns<Row[]>();
+          .order('start_ts', { ascending: true });
 
+        if (!isAdmin) {
+          const esc = me.replace(/([{}%,])/g, '');
+          q2 = q2.or(`employee_names.cs.{${esc}},employee_name.ilike.%${esc}%`);
+        }
+
+        const fallback = await q2.returns<Row[]>();
         data = fallback.data ?? [];
         error = fallback.error;
       } else {
-        // ✅ 실제 컬럼 존재 여부를 반드시 boolean으로 변환
+        // ✅ 컬럼 지원 여부 판별
         setHasFinanceCols(true);
         const hasMulti = !!(data && (Array.isArray(data[0]?.employee_names) || data.some(r => Array.isArray(r.employee_names))));
         const hasOff   = !!(data && (typeof data[0]?.off_day === 'boolean' || data.some(r => typeof r.off_day === 'boolean')));
@@ -187,7 +230,6 @@ export default function Page() {
       // 2) 직원 마스터 로드
       await loadProfiles();
     } catch (e: any) {
-      // 예기치 못한 예외도 메시지로 보여주고, 로딩이 끝나도록 처리
       setMsg(`불러오기 오류: ${e?.message ?? String(e)}`);
       setRows([]);
       setHasFinanceCols(false);
@@ -197,6 +239,7 @@ export default function Page() {
       setLoading(false);
     }
   };
+
 
   const loadProfiles = async () => {
     try {
@@ -230,7 +273,11 @@ export default function Page() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+    // 권한/내이름 준비 후 로드
+  useEffect(() => { 
+    load(); 
+  }, [isAdmin, myName]);
+
 
   // Realtime - schedules (원본 테이블에서 변경 발생 시 새로 불러오기)
   useEffect(() => {
