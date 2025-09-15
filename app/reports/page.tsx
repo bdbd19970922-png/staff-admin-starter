@@ -19,7 +19,7 @@ type Row = {
   material_cost?: number | null;
   daily_wage?: number | null;
   extra_cost?: number | null;
-  net_profit_visible?: number | null; // ✅ 추가
+  net_profit_visible?: number | null; // (뷰에 있을 수 있음)
 };
 
 type GroupedRow = {
@@ -49,6 +49,10 @@ export default function ReportsPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [hasFinanceCols, setHasFinanceCols] = useState<boolean | null>(null); // null=미확인
 
+  // 현재 로그인 사용자 정보(자기 일정만 보이기용)
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
+
   // 보기/그래프 옵션
   const [mode, setMode] = useState<Mode>('daily');
   const [metric, setMetric] = useState<Metric>('revenue');
@@ -61,17 +65,41 @@ export default function ReportsPage() {
   // 직원별 보기에서 사용할 "직원 선택" (소문자 key, 'all' 포함)
   const [empNameFilter, setEmpNameFilter] = useState<string>('all');
 
-  // 관리자 판별
+  // 관리자/사용자 판별 + 사용자 프로필 이름 로드
   useEffect(() => {
     (async () => {
       const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
         .split(',').map(s => s.trim()).filter(Boolean);
       const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
         .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-      const { data: { session} } = await supabase.auth.getSession();
+
+      const { data: { session } } = await supabase.auth.getSession();
       const uid = session?.user?.id ?? '';
       const email = (session?.user?.email ?? '').toLowerCase();
+      setUserId(uid || null);
       setIsAdmin((!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email)));
+
+      // 이름은 profiles 테이블에서 우선 조회 (display_name/full_name/name 순)
+      let name: string | null = null;
+      if (uid) {
+        const prof = await supabase
+          .from('profiles')
+          .select('display_name, full_name, name')
+          .eq('id', uid)
+          .maybeSingle();
+        if (!prof.error) {
+          name = (prof.data?.display_name || prof.data?.full_name || prof.data?.name || '').trim() || null;
+        }
+      }
+      // 메타데이터 fallback
+      if (!name) {
+        const metaName =
+          (session?.user?.user_metadata?.name ??
+            session?.user?.user_metadata?.full_name ??
+            session?.user?.user_metadata?.user_name) as string | undefined;
+        name = (metaName || '').trim() || null;
+      }
+      setUserName(name);
     })();
   }, []);
 
@@ -81,22 +109,22 @@ export default function ReportsPage() {
       setLoading(true);
       setMsg(null);
 
-      // ✅ 읽기는 뷰로 (관리자=실값, 비관리자=NULL)
+      // 읽기는 뷰로 (관리자=실값, 비관리자=뷰에서 적절 처리)
       const sel1 =
         'id,title,start_ts,end_ts,employee_id,employee_name,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
 
       let { data, error } = await supabase
-        .from('schedules_secure') // ✅ 테이블 → 뷰
+        .from('schedules_secure') // 테이블이 아니라 보안 뷰 사용 권장
         .select(sel1)
         .order('start_ts', { ascending: true })
         .returns<Row[]>();
 
       if (error) {
         setHasFinanceCols(false);
-        // 폴백도 뷰 사용(최소 컬럼)
+        // 폴백 최소 컬럼
         const sel2 = 'id,title,start_ts,end_ts,employee_id,employee_name';
         const fb = await supabase
-          .from('schedules_secure') // ✅
+          .from('schedules_secure')
           .select(sel2)
           .order('start_ts', { ascending: true })
           .returns<Row[]>();
@@ -111,17 +139,32 @@ export default function ReportsPage() {
     })();
   }, []);
 
-  // 날짜로 1차 필터
+  // ✅ 권한 기반 1차 필터(관리자 제외: 본인 것만)
+  const rowsForUser = useMemo(() => {
+    if (isAdmin) return rows;
+    const uid = (userId ?? '').trim();
+    const uname = normalizeName(userName);
+    if (!uid && !uname) return []; // 인증정보 없으면 아무 것도 안보임
+
+    return rows.filter(r => {
+      // employee_id 일치 또는 employee_name(정규화) 일치 시 본인 것으로 간주
+      const matchId = !!uid && (r.employee_id ?? '').trim() === uid;
+      const matchName = !!uname && normalizeName(r.employee_name) === uname;
+      return matchId || matchName;
+    });
+  }, [rows, isAdmin, userId, userName]);
+
+  // 날짜로 2차 필터
   const filteredByDate = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
-    if (!s || !e) return rows;
-    return rows.filter(r => {
+    if (!s || !e) return rowsForUser;
+    return rowsForUser.filter(r => {
       const d = safeParse(r.start_ts);
       if (!d) return false;
       return !isBefore(d, s) && !isAfter(d, e);
     });
-  }, [rows, dateFrom, dateTo]);
+  }, [rowsForUser, dateFrom, dateTo]);
 
   // 직원 이름 목록(날짜 필터 적용 후)
   const employeeNameOptions = useMemo(() => {
@@ -143,18 +186,18 @@ export default function ReportsPage() {
   // 테이블용 그룹핑
   const grouped: Grouped = useMemo(() => {
     if (mode === 'employee') return groupByEmployee(filteredForGrouping);
-    if (mode === 'weekly') return groupByWeek(filteredForGrouping);
-    if (mode === 'monthly') return groupByMonth(filteredForGrouping);
+    if (mode === 'weekly')   return groupByWeek(filteredForGrouping);
+    if (mode === 'monthly')  return groupByMonth(filteredForGrouping);
     return groupByDay(filteredForGrouping);
   }, [filteredForGrouping, mode]);
 
-  // ✅ (중요) 비관리자는 net 선택 시 강제로 revenue로 대체
+  // (중요) 비관리자는 net 선택 시 강제로 revenue로 대체
   const metricSafe: Metric = useMemo(
     () => (!isAdmin && metric === 'net') ? 'revenue' : metric,
     [isAdmin, metric]
   );
 
-  // ✅ 그래프는 항상 "일자별 X축"으로 표시
+  // 그래프: 항상 "일자별 X축"
   const chartDaily = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
@@ -171,16 +214,17 @@ export default function ReportsPage() {
     const labels = days.map(d => format(d, 'yyyy-MM-dd'));
     const values = days.map(d => {
       const key = format(d, 'yyyy-MM-dd');
-      // 같은 날짜의 모든 스케줄 합산
       let sum = 0;
       for (const r of baseRows) {
         const rd = safeParse(r.start_ts);
         if (!rd) continue;
         const k = format(rd, 'yyyy-MM-dd');
         if (k !== key) continue;
+
         if (metricSafe === 'net') {
-          if (hasFinanceCols === false) continue; // 재무 컬럼이 없으면 0 취급
-          sum += num(r.revenue) - num(r.material_cost) - num(r.daily_wage) + num(r.extra_cost) / 2;
+          // 관리자만 net 집계
+          if (!isAdmin) continue;
+          sum += computeNet(r);
         } else if (metricSafe === 'revenue') {
           sum += num(r.revenue);
         } else if (metricSafe === 'daily_wage') {
@@ -191,7 +235,7 @@ export default function ReportsPage() {
     });
 
     return { labels, values };
-  }, [filteredByDate, dateFrom, dateTo, metricSafe, mode, empNameFilter, hasFinanceCols]);
+  }, [filteredByDate, dateFrom, dateTo, metricSafe, mode, empNameFilter, isAdmin]);
 
   // 직원별 인건비 → 급여 테이블 반영(관리자만)
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
@@ -294,13 +338,10 @@ export default function ReportsPage() {
     }
   };
 
-  // 🔹 여기서부터가 컴포넌트의 반환부입니다. 위에 불필요한 닫힘 중괄호가 없도록 유지하세요.
+  // 🔹 컴포넌트 반환부
   return (
     <div>
-      
-
       <div className="p-4 space-y-4">
-        {/* 제목: 스카이 → 인디고 그라데이션 */}
         <h1 className="text-2xl font-extrabold">
           <span className="title-gradient">📊 리포트</span>
         </h1>
@@ -349,7 +390,6 @@ export default function ReportsPage() {
                 >
                   <option value="revenue">매출</option>
                   <option value="daily_wage">인건비</option>
-                  {/* 비관리자는 순수익 옵션 숨김 */}
                   {isAdmin && <option value="net">순수익</option>}
                 </select>
               </div>
@@ -421,7 +461,7 @@ export default function ReportsPage() {
           </div>
         )}
 
-        {/* 그래프: 항상 일자 X축 */}
+        {/* 그래프 */}
         <div className="card p-3">
           {loading ? (
             <div className="text-sm text-gray-600">그래프 준비 중…</div>
@@ -448,11 +488,11 @@ export default function ReportsPage() {
       </div>
     </div>
   );
-} // ← 여기 하나의 닫힘 중괄호가 컴포넌트 끝입니다.
+}
 
 /* =================== 표 컴포넌트 =================== */
 function TableReport({
-  mode, data, isAdmin, hasFinanceCols,
+  mode, data, isAdmin,
 }: {
   mode: Mode;
   data: Grouped;
@@ -471,47 +511,53 @@ function TableReport({
             {baseHeaders.map(h => (
               <th key={h} className="border border-sky-100 px-2 py-1 text-left text-sm">{h}</th>
             ))}
-            {/* 순수익 컬럼은 항상 표에 보이되, 비관리자에게는 값만 블라인드 */}
             <th className="border border-sky-100 px-2 py-1 text-left text-sm">순수익</th>
           </tr>
         </thead>
         <tbody>
           {data.rows.map(r => {
-            const net = r.revenue - r.material_cost - r.daily_wage + r.extra_cost / 2;
+            const net = computeNet(r);
             return (
               <tr key={r.key} className="hover:bg-sky-50/50">
                 <td className="border border-sky-100 px-2 py-1 text-sm">{r.label}</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm">{r.count}</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.revenue)}</td>
-                {/* 자재비: 비관리자 블라인드 */}
-                <td className="border border-sky-100 px-2 py-1 text-sm"> {fmtMoney(r.material_cost)}</td>
+
+                {/* 자재비: 비관리자 마스킹 */}
+                <td className="border border-sky-100 px-2 py-1 text-sm">
+                  {isAdmin ? fmtMoney(r.material_cost) : '***'}
+                </td>
+
                 <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.daily_wage)}</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.extra_cost)}</td>
-                {/* 순수익: 재무 컬럼 없으면 '-', 있고 비관리자면 블라인드 */}
-                 <td className="border border-sky-100 px-2 py-1 text-sm"> 
-  {net == null ? '—' : fmtMoney(net)}
-</td>
+
+                {/* 순수익: 비관리자 마스킹 */}
+                <td className="border border-sky-100 px-2 py-1 text-sm">
+                  {isAdmin ? fmtMoney(net) : '***'}
+                </td>
               </tr>
             );
           })}
         </tbody>
         <tfoot className="bg-sky-50">
-          <tr>
-            <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">합계</td>
-            <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{data.total.count}</td>
-            <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.revenue)}</td>
-            {/* 자재비 합계: 비관리자 블라인드 */}
-            <td className="border border-sky-100 px-2 py-1 text-sm font-semibold"> 
-  {fmtMoney(data.total.material_cost)}
-</td>
-            <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.daily_wage)}</td>
-            <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.extra_cost)}</td>
-            {/* 순수익 합계 */}
-            <td className="border border-sky-100 px-2 py-1 text-sm font-semibold"> 
-  {data.total.revenue == null ? '—' :
-    fmtMoney(data.total.revenue - data.total.material_cost - data.total.daily_wage + data.total.extra_cost / 2)}
-</td>
-          </tr>
+          {(() => {
+            const totalNet = computeNet(data.total);
+            return (
+              <tr>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">합계</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{data.total.count}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.revenue)}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">
+                  {isAdmin ? fmtMoney(data.total.material_cost) : '***'}
+                </td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.daily_wage)}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.extra_cost)}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">
+                  {isAdmin ? fmtMoney(totalNet) : '***'}
+                </td>
+              </tr>
+            );
+          })()}
         </tfoot>
       </table>
     </div>
@@ -701,6 +747,11 @@ function sumGroups(acc: GroupedRow, r: GroupedRow): GroupedRow {
   };
 }
 
+// 순수익 계산(현재 로직 유지: revenue - material_cost - daily_wage + extra_cost/2)
+function computeNet(x: {revenue?:number|null; material_cost?:number|null; daily_wage?:number|null; extra_cost?:number|null}) {
+  return num(x.revenue) - num(x.material_cost) - num(x.daily_wage) + num(x.extra_cost) / 2;
+}
+
 function fmtMoney(n: number) {
   if (!Number.isFinite(n) || n === 0) return n === 0 ? '₩0' : '-';
   try {
@@ -764,4 +815,9 @@ async function resolveEmployeeIdByName(name: string): Promise<string | null> {
       .filter(Boolean) as string[])
   );
   return ids.length === 1 ? ids[0] : null;
+}
+
+// 이름 정규화
+function normalizeName(n?: string | null) {
+  return ((n ?? '').trim().toLowerCase()) || '';
 }

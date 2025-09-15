@@ -3,7 +3,6 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import AuthBar from '@/components/AuthBar';
 import { supabase } from '@/lib/supabaseClient';
 import { startOfMonth, endOfMonth, formatISO } from 'date-fns';
 
@@ -15,110 +14,195 @@ export default function Page() {
     { label: '오늘 일정', value: '-', href: '/schedules' },
     { label: '이번 달 총 매출', value: '-', href: '/reports', note: '리포트 기준' },
     { label: '미지급 급여(건수)', value: '-', href: '/payrolls' },
-    { label: '이번 달 지출(자재+경비)', value: '-', href: '/reports', note: '리포트 기준' },
+    // 직원은 지출 카드를 숨깁니다 (아래에서 조건부로만 추가)
   ]);
+
+  // 사용자 / 권한
+  const [uid, setUid] = useState<string | null>(null);
+  const [fullName, setFullName] = useState<string>(''); // 항상 profiles.full_name 우선
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [isManager, setIsManager] = useState<boolean>(false);
+  const isElevated = isAdmin || isManager; // 관리자 or 매니저
   const [hello, setHello] = useState<string>('');
 
+  // 1) 내 정보/권한 확정 + 인사말 (항상 full_name)
   useEffect(() => {
     (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const _uid = session?.user?.id ?? null;
+      const email = (session?.user?.email ?? '').toLowerCase();
+      setUid(_uid);
+
+      // (기존 호환) 환경변수 기반 관리자
+      const parseList = (env?: string) =>
+        (env ?? '').split(',').map(s => s.trim()).filter(Boolean);
+      const adminIds = parseList(process.env.NEXT_PUBLIC_ADMIN_IDS);
+      const adminEmails = parseList(process.env.NEXT_PUBLIC_ADMIN_EMAILS).map(s => s.toLowerCase());
+
+      let elevatedAdmin = (!!_uid && adminIds.includes(_uid)) || (!!email && adminEmails.includes(email));
+      let elevatedManager = false;
+
+      // 프로필 조회(권한 + 이름)
+      let nameFromProfile = '';
+      if (_uid) {
+        const { data: me } = await supabase
+          .from('profiles')
+          .select('full_name, is_admin, is_manager')
+          .eq('id', _uid)
+          .maybeSingle();
+
+        nameFromProfile = (me?.full_name ?? '').trim();
+        if (me?.is_admin) elevatedAdmin = true;
+        if (me?.is_manager) elevatedManager = true;
+      }
+
+      // 이름은 full_name 우선, 없으면 이메일 아이디
+      const resolvedName =
+        nameFromProfile ||
+        (session?.user?.email ? session.user.email.split('@')[0] : '');
+
+      setFullName(resolvedName);
+      setIsAdmin(!!elevatedAdmin);
+      setIsManager(!!elevatedManager);
+
+      // 상단 인사 (항상 가입한 이름 기준)
+      setHello(resolvedName ? `${resolvedName} 님 환영합니다!` : '환영합니다!');
+    })();
+  }, []);
+
+  // 2) 통계 집계 (권한/이름 확정 후 동작)
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
       try {
-        // 인사 (이메일 → 이름으로)
-const { data: { session } } = await supabase.auth.getSession();
-const uid = session?.user?.id;
-
-if (uid) {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('full_name')
-    .eq('id', uid)
-    .single();
-
-  const name = !error && data?.full_name ? data.full_name : session?.user?.email?.split('@')[0] ?? '';
-  setHello(name ? `${name} 님 환영합니다!` : '환영합니다!');
-}
-
-
-
-        // 기간
         const now = new Date();
-        const todayStr = formatISO(now, { representation: 'date' }); // YYYY-MM-DD
+        const todayStr   = formatISO(now, { representation: 'date' }); // YYYY-MM-DD
         const monthStart = formatISO(startOfMonth(now));
-        const monthEnd = formatISO(endOfMonth(now));
+        const monthEnd   = formatISO(endOfMonth(now));
+
+        // 직원 전용 필터(내 스케줄만): employee_id 또는 이름 포함
+        const buildOwnerOr = (meUid: string | null, meName: string) => {
+          const nameEnc = (meName ?? '').replace(/([{}%,])/g, ''); // 단순 이스케이프
+          const parts: string[] = [];
+          if (meUid) parts.push(`employee_id.eq.${meUid}`);
+          if (nameEnc) {
+            parts.push(`employee_names.cs.{${nameEnc}}`);
+            parts.push(`employee_name.ilike.%${nameEnc}%`);
+          }
+          // 최소 1개는 넣어야 하므로, 없으면 절대 매치 안 되는 토큰 추가
+          return parts.length ? parts.join(',') : 'id.eq.-1';
+        };
 
         // 1) 오늘 일정 개수
-        const todayCount = supabase
-          .from('schedules')
-          .select('*', { count: 'exact', head: true })
-          .gte('start_ts', `${todayStr}T00:00:00`)
-          .lte('start_ts', `${todayStr}T23:59:59`)
-          .then(({ count, error }) => (!error && typeof count === 'number' ? count : 0));
-
-        // 2) 이번 달 매출 합계
-        const monthRevenue = supabase
-          .from('schedules')
-          .select('revenue, material_cost, daily_wage, extra_cost, start_ts')
-          .gte('start_ts', monthStart)
-          .lte('start_ts', monthEnd)
-          .limit(5000)
-          .then(({ data, error }) => {
-            if (error || !data) return '-';
-            const rev = data.reduce((acc: number, r: any) => acc + num(r.revenue), 0);
-            return fmtKRW(rev);
-          });
-
-        // 3) 미지급 급여 건수
-        const unpaidCount = (() => {
-          const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-          return supabase
-            .from('payrolls')
-            .select('*', { count: 'exact', head: true })
-            .eq('pay_month', ym)
-            .eq('paid', false)
-            .then(({ count, error }) => (!error && typeof count === 'number' ? count : 0));
+        const todayCountPromise = (async () => {
+          let q = supabase
+            .from('schedules_secure')
+            .select('id', { count: 'exact', head: true })
+            .gte('start_ts', `${todayStr}T00:00:00`)
+            .lte('start_ts', `${todayStr}T23:59:59`);
+          if (!isElevated) q = q.or(buildOwnerOr(uid, fullName));
+          const { count } = await q;
+          return typeof count === 'number' ? count : 0;
         })();
 
-        // 4) 이번 달 지출(자재+경비)
-        const monthSpending = (async () => {
-          let sum = 0;
-
-          const s = await supabase
-            .from('schedules')
-            .select('material_cost, extra_cost, start_ts')
+        // 2) 이번 달 총 매출
+        const monthRevenuePromise = (async () => {
+          let q = supabase
+            .from('schedules_secure')
+            .select('revenue,start_ts')
             .gte('start_ts', monthStart)
             .lte('start_ts', monthEnd)
             .limit(5000);
-          if (!s.error && s.data) {
-            sum += s.data.reduce((acc: number, r: any) => acc + num(r.material_cost) + num(r.extra_cost), 0);
+          if (!isElevated) q = q.or(buildOwnerOr(uid, fullName));
+          const { data } = await q;
+          if (!data) return '-';
+          const rev = data.reduce((acc: number, r: any) => acc + toNum(r.revenue), 0);
+          return fmtKRW(rev);
+        })();
+
+        // 3) 미지급 급여(건수)
+        const unpaidCountPromise = (async () => {
+          const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+          if (!isElevated) {
+            // employee_id 우선
+            let { count, error } = await supabase
+              .from('payrolls')
+              .select('*', { count: 'exact', head: true })
+              .eq('pay_month', ym)
+              .eq('paid', false)
+              .eq('employee_id', uid ?? '__none__');
+            if (!error && typeof count === 'number') return count;
+
+            // fallback: 이름(스키마에 따라 다를 수 있어 폴백만 적용)
+            const { count: c2 } = await supabase
+              .from('payrolls')
+              .select('*', { count: 'exact', head: true })
+              .eq('pay_month', ym)
+              .eq('paid', false)
+              .ilike('employee_name', `%${fullName}%`);
+            return typeof c2 === 'number' ? c2 : 0;
+          } else {
+            const { count } = await supabase
+              .from('payrolls')
+              .select('*', { count: 'exact', head: true })
+              .eq('pay_month', ym)
+              .eq('paid', false);
+            return typeof count === 'number' ? count : 0;
+          }
+        })();
+
+        // 4) 이번 달 지출(자재+경비) — 관리자/매니저만
+        const monthSpendingPromise = (async () => {
+          if (!isElevated) return null;
+          let sum = 0;
+
+          // 스케줄에서 자재/경비
+          {
+            const { data } = await supabase
+              .from('schedules_secure')
+              .select('material_cost,extra_cost,start_ts')
+              .gte('start_ts', monthStart)
+              .lte('start_ts', monthEnd)
+              .limit(5000);
+            if (data) {
+              sum += data.reduce((acc: number, r: any) => acc + toNum(r.material_cost) + toNum(r.extra_cost), 0);
+            }
           }
 
-          const e = await supabase
-            .from('expenses')
-            .select('amount, spent_at')
-            .gte('spent_at', monthStart)
-            .lte('spent_at', monthEnd)
-            .limit(5000);
-          if (!e.error && e.data) {
-            sum += e.data.reduce((acc: number, r: any) => acc + num(r.amount), 0);
+          // 일반 경비 테이블
+          {
+            const { data, error } = await supabase
+              .from('expenses')
+              .select('amount, spent_at')
+              .gte('spent_at', monthStart)
+              .lte('spent_at', monthEnd)
+              .limit(5000);
+            if (!error && data) {
+              sum += data.reduce((acc: number, r: any) => acc + toNum(r.amount), 0);
+            }
           }
 
           return fmtKRW(sum);
         })();
 
-        const [cnt, rev, unpaid, spend] = await Promise.all([todayCount, monthRevenue, unpaidCount, monthSpending]);
+        const [cnt, rev, unpaid, spend] = await Promise.all([
+          todayCountPromise, monthRevenuePromise, unpaidCountPromise, monthSpendingPromise,
+        ]);
 
-        setStats([
+        const next: Stat[] = [
           { label: '오늘 일정', value: cnt, href: '/schedules' },
           { label: '이번 달 총 매출', value: rev, href: '/reports', note: '리포트 기준' },
           { label: '미지급 급여(건수)', value: unpaid, href: '/payrolls' },
-          { label: '이번 달 지출(자재+경비)', value: spend, href: '/reports', note: '리포트 기준' },
-        ]);
-      } catch {
-        // 무시
+        ];
+        if (isElevated) {
+          next.push({ label: '이번 달 지출(자재+경비)', value: spend ?? '-', href: '/reports', note: '리포트 기준' });
+        }
+        setStats(next);
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [isElevated, fullName, uid]);
 
   return (
     <div
@@ -130,9 +214,7 @@ if (uid) {
             linear-gradient(to_bottom,var(--tw-gradient-stops))]
       "
     >
-      
-
-      {/* 상단 헤더: 파스텔 블루 포인트 + 얇은 경계선 */}
+      {/* 상단 헤더 */}
       <header className="sticky top-0 z-10 border-b border-sky-100/60 bg-white/75 backdrop-blur">
         <div className="app-container py-5">
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
@@ -140,12 +222,23 @@ if (uid) {
               대시보드
             </span>
           </h1>
-          <p className="text-slate-600 mt-1 font-medium">{hello}</p>
+          <p className="text-slate-600 mt-1 font-medium">
+            {hello}
+          </p>
+
+          {/* 일반직원 모드 안내 + 개인화 응원 멘트 */}
+          {!isElevated && (
+            <p className="text-slate-500 text-sm mt-0.5">
+              {fullName ? `${fullName} 님, 오늘도 안전 최우선! 항상 노고에 감사드립니다 🙏` : '오늘도 안전 최우선! 항상 노고에 감사드립니다 🙏'}
+              <br />
+              <span className="text-[12px]"></span>
+            </p>
+          )}
         </div>
       </header>
 
       <main className="app-container space-y-7 py-6">
-        {/* 빠른 이동: 부드러운 파란 버튼 */}
+        {/* 빠른 이동 */}
         <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <QuickLink href="/schedules" label="스케줄" />
           <QuickLink href="/calendar" label="캘린더" />
@@ -153,7 +246,7 @@ if (uid) {
           <QuickLink href="/reports" label="리포트" />
         </section>
 
-        {/* KPI 카드: 화이트→파스텔 블루 그라데이션 + 얇은 링 + 고급 그림자 */}
+        {/* KPI 카드 */}
         <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           {stats.map((s, i) => (
             <StatCard key={i} {...s} loading={loading} />
@@ -164,7 +257,7 @@ if (uid) {
   );
 }
 
-/* ---------- 파스텔 QuickLink ---------- */
+/* ---------- QuickLink ---------- */
 function QuickLink({ href, label }: { href: string; label: string }) {
   return (
     <Link href={href} className="group block">
@@ -176,7 +269,7 @@ function QuickLink({ href, label }: { href: string; label: string }) {
   );
 }
 
-/* ---------- 파스텔 StatCard ---------- */
+/* ---------- StatCard ---------- */
 function StatCard({ label, value, note, href, loading }: Stat & { loading: boolean }) {
   const Panel = ({ children }: { children: React.ReactNode }) => (
     <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-gradient-to-br from-white to-sky-50/60 p-5 shadow-[0_6px_16px_rgba(2,132,199,0.08)] hover:shadow-[0_10px_22px_rgba(2,132,199,0.12)] transition h-full">
@@ -204,7 +297,7 @@ function StatCard({ label, value, note, href, loading }: Stat & { loading: boole
 }
 
 /* -------- 유틸 -------- */
-function num(v: any): number {
+function toNum(v: any): number {
   const x = Number(v ?? 0);
   return Number.isFinite(x) ? x : 0;
 }

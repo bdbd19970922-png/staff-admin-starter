@@ -12,6 +12,7 @@ type ProfileRow = {
   full_name: string | null
   phone: string | null
   is_admin: boolean | null
+  is_manager: boolean | null   // ✅ 추가: 상단 공통 타입에도 반영
 }
 
 type ScheduleRow = {
@@ -158,6 +159,15 @@ function EmployeesSection() {
   const [msg, setMsg] = useState<string | null>(null)
   const [edit, setEdit] = useState<ProfileRowLite | null>(null)
   const [q, setQ] = useState('') // 🔎 검색어
+  const [meId, setMeId] = useState<string | null>(null)   // ✅ 현재 로그인 사용자 id
+
+  // 현재 로그인 사용자 id 로드
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser()
+      setMeId(data.user?.id ?? null)
+    })()
+  }, [])
 
   const load = async () => {
     setLoading(true); setMsg(null)
@@ -179,6 +189,11 @@ function EmployeesSection() {
       .update({ full_name, phone, is_manager })
       .eq('id', id)
     if (error) { alert(error.message); return }
+    // ✅ 본인을 매니저로 갱신/해제한 경우 즉시 반영되도록 새로고침
+    if (meId && meId === id && typeof window !== 'undefined') {
+      window.location.reload()
+      return
+    }
     setEdit(null); load()
   }
 
@@ -186,6 +201,20 @@ function EmployeesSection() {
     if (!confirm('정말 삭제할까요? (auth 계정은 삭제되지 않습니다)')) return
     const { error } = await supabase.from('profiles').delete().eq('id', id)
     if (error) { alert(error.message); return }
+    load()
+  }
+
+  // ✅ “원클릭 매니저 부여/해제” (편집 모드 불필요)
+  const grantManager = async (id: string) => {
+    const { error } = await supabase.from('profiles').update({ is_manager: true }).eq('id', id)
+    if (error) { alert(error.message); return }
+    if (meId && meId === id && typeof window !== 'undefined') { window.location.reload(); return }
+    load()
+  }
+  const revokeManager = async (id: string) => {
+    const { error } = await supabase.from('profiles').update({ is_manager: false }).eq('id', id)
+    if (error) { alert(error.message); return }
+    if (meId && meId === id && typeof window !== 'undefined') { window.location.reload(); return }
     load()
   }
 
@@ -287,7 +316,7 @@ function EmployeesSection() {
                       {r.is_admin ? '✅' : '—'}
                     </TableCell>
 
-                    {/* 매니저 토글 */}
+                    {/* 매니저 상태 */}
                     <TableCell className="align-middle text-center">
                       {isEditing ? (
                         <Switch
@@ -315,6 +344,16 @@ function EmployeesSection() {
                           <Button size="sm" variant="outline" onClick={() => setEdit(r)}>
                             수정
                           </Button>
+                          {/* ✅ 원클릭 매니저 부여/해제 */}
+                          {r.is_manager ? (
+                            <Button size="sm" variant="secondary" onClick={() => revokeManager(r.id)}>
+                              매니저 해제
+                            </Button>
+                          ) : (
+                            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => grantManager(r.id)}>
+                              매니저 부여
+                            </Button>
+                          )}
                           <Button size="sm" variant="destructive" onClick={() => onDelete(r.id)}>
                             삭제
                           </Button>
@@ -330,7 +369,8 @@ function EmployeesSection() {
       )}
 
       <p className="mt-3 text-xs text-slate-500">
-        ※ 매니저는 /admin 접근권한은 없지만 직원/스케줄/정산 편집 권한은 관리자와 동일합니다.
+        ※ 매니저는 /admin 접근권한은 없지만 직원/스케줄/정산 편집 권한은 관리자와 동일합니다. <br/>
+        ※ 캘린더/리포트에서 <b>자재비·순수익은 자동 마스킹</b> 처리(별도 과정 불필요).
       </p>
     </div>
   )
