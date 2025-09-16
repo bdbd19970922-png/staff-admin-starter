@@ -75,7 +75,6 @@ export default function Page() {
 
   // 관리자/재무컬럼 유무
   const [isAdmin, setIsAdmin] = useState(false);
-  const [isManager, setIsManager] = useState(false);
   const [hasFinanceCols, setHasFinanceCols] = useState<boolean | null>(null); // null=미확인
 
   // “여러 직원”/“휴무” 사용 가능 여부(컬럼 존재 탐지)
@@ -136,8 +135,7 @@ useEffect(() => {
         .eq('id', uid)
         .maybeSingle();
 
-       if (me?.is_admin) setIsAdmin(true);
-       if (me?.is_manager) setIsManager(true); // ← 매니저 플래그 반영
+      if (me?.is_admin || me?.is_manager) elevated = true;
 
       // 🔑 내 이름을 반드시 저장 (프런트 필터용)
       const fallback = (session?.user?.email?.split('@')[0] ?? '').trim();
@@ -173,47 +171,47 @@ useEffect(() => {
         return;
       }
 
-     const sel1 =
-  'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,daily_wage,extra_cost,material_cost_visible,net_profit_visible';
+      // 1) 스케줄 로드 (신규 컬럼 우선 시도)
+      const sel1 =
+        'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
 
-// 기본 쿼리: 뷰에서 읽기
-let query = supabase
-  .from('schedules_secure')
-  .select(sel1)
-  .order('start_ts', { ascending: true });
+      // 기본 쿼리: 뷰에서 읽기
+      let query = supabase
+        .from('schedules_secure')
+        .select(sel1)
+        .order('start_ts', { ascending: true });
 
-// ✅ 직원(비관리자, 즉 관리자·매니저가 아닌 경우)만 내 일정 필터링
-if (!(isAdmin || isManager)) {
-  const esc = me.replace(/([{}%,])/g, ''); // 간단 이스케이프
-  query = query.or(`employee_names.cs.{${esc}},employee_name.ilike.%${esc}%`);
-}
+      // ✅ 직원(비관리자)인 경우 서버단에서 "내 이름 포함 일정"만 가져오기
+      if (!isAdmin) {
+        const esc = me.replace(/([{}%,])/g, ''); // 간단 이스케이프
+        query = query.or(`employee_names.cs.{${esc}},employee_name.ilike.%${esc}%`);
+      }
 
-let { data, error } = await query.returns<Row[]>();
+      let { data, error } = await query.returns<Row[]>();
 
-if (error) {
-  // 2차: 안전 컬럼만
-  setHasFinanceCols(false);
-  setSupportsMultiEmp(false);
-  setSupportsOff(false);
+      if (error) {
+        // 2차: 안전 컬럼만
+        setHasFinanceCols(false);
+        setSupportsMultiEmp(false);
+        setSupportsOff(false);
 
-  const sel2 =
-    'id,title,start_ts,end_ts,employee_id,employee_name,customer_name,customer_phone,site_address';
+        const sel2 =
+          'id,title,start_ts,end_ts,employee_id,employee_name,customer_name,customer_phone,site_address';
 
-  let q2 = supabase
-    .from('schedules_secure')
-    .select(sel2)
-    .order('start_ts', { ascending: true });
+        let q2 = supabase
+          .from('schedules_secure')
+          .select(sel2)
+          .order('start_ts', { ascending: true });
 
-  if (!(isAdmin || isManager)) {
-    const esc = me.replace(/([{}%,])/g, '');
-    q2 = q2.or(`employee_names.cs.{${esc}},employee_name.ilike.%${esc}%`);
-  }
+        if (!isAdmin) {
+          const esc = me.replace(/([{}%,])/g, '');
+          q2 = q2.or(`employee_names.cs.{${esc}},employee_name.ilike.%${esc}%`);
+        }
 
-  const fallback = await q2.returns<Row[]>();
-  data = fallback.data ?? [];
-  error = fallback.error;
-} else {
-  // 정상 로드 성공 시 처리
+        const fallback = await q2.returns<Row[]>();
+        data = fallback.data ?? [];
+        error = fallback.error;
+      } else {
         // ✅ 컬럼 지원 여부 판별
         setHasFinanceCols(true);
         const hasMulti = !!(data && (Array.isArray(data[0]?.employee_names) || data.some(r => Array.isArray(r.employee_names))));
