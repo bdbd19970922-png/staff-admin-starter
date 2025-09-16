@@ -172,14 +172,15 @@ useEffect(() => {
       }
 
       // 1) 스케줄 로드 (신규 컬럼 우선 시도)
-      const sel1 =
-        'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
+const sel1 =
+  'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,daily_wage,extra_cost,material_cost_visible,net_profit_visible';
 
-      // 기본 쿼리: 뷰에서 읽기
-      let query = supabase
-        .from('schedules_secure')
-        .select(sel1)
-        .order('start_ts', { ascending: true });
+// 기본 쿼리: 뷰에서 읽기
+let query = supabase
+  .from('schedules_secure')
+  .select(sel1)
+  .order('start_ts', { ascending: true });
+
 
       // ✅ 직원(비관리자)인 경우 서버단에서 "내 이름 포함 일정"만 가져오기
       if (!isAdmin) {

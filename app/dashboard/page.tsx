@@ -1,4 +1,4 @@
-// FILE: /app/dashboard/page.tsx
+// FILE: app/dashboard/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -93,7 +93,7 @@ export default function Page() {
           return parts.length ? parts.join(',') : 'id.eq.-1';
         };
 
-        // 1) 오늘 일정 개수
+        // 1) 오늘 일정 개수 (뷰에서 읽기)
         const todayCountPromise = (async () => {
           let q = supabase
             .from('schedules_secure')
@@ -105,7 +105,7 @@ export default function Page() {
           return typeof count === 'number' ? count : 0;
         })();
 
-        // 2) 이번 달 총 매출
+        // 2) 이번 달 총 매출 (뷰에서 읽기)
         const monthRevenuePromise = (async () => {
           let q = supabase
             .from('schedules_secure')
@@ -152,24 +152,28 @@ export default function Page() {
         })();
 
         // 4) 이번 달 지출(자재+경비) — 관리자/매니저만
+        //    중요: 자재비는 원본(material_cost)이 아니라 material_cost_visible 사용(뷰에서 마스킹)
         const monthSpendingPromise = (async () => {
           if (!isElevated) return null;
           let sum = 0;
 
-          // 스케줄에서 자재/경비
+          // 스케줄에서 자재/경비 (뷰에서 읽기)
           {
             const { data } = await supabase
               .from('schedules_secure')
-              .select('material_cost,extra_cost,start_ts')
+              .select('material_cost_visible,extra_cost,start_ts')
               .gte('start_ts', monthStart)
               .lte('start_ts', monthEnd)
               .limit(5000);
             if (data) {
-              sum += data.reduce((acc: number, r: any) => acc + toNum(r.material_cost) + toNum(r.extra_cost), 0);
+              sum += data.reduce(
+                (acc: number, r: any) => acc + toNum(r.material_cost_visible) + toNum(r.extra_cost),
+                0
+              );
             }
           }
 
-          // 일반 경비 테이블
+          // 일반 경비 테이블 (원본 설계에 따라 계속 사용)
           {
             const { data, error } = await supabase
               .from('expenses')
