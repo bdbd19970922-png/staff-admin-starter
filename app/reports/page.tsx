@@ -10,16 +10,15 @@ import {
 
 type Row = {
   id: number;
-  title: string | null;
-  start_ts: string | null;
-  end_ts: string | null;
+  // reports_secure 기준
+  work_date?: string | null;                 // ← 뷰에서 date(s.start_ts)
   employee_id?: string | null;
   employee_name?: string | null;
   revenue?: number | null;
-  material_cost?: number | null;
+  material_cost_visible?: number | null;     // ← 항상 이 컬럼만 사용
   daily_wage?: number | null;
   extra_cost?: number | null;
-  net_profit_visible?: number | null; // (뷰에 있을 수 있음)
+  net_profit_visible?: number | null;        // ← 관리자만 값, 비관리자 null
 };
 
 type GroupedRow = {
@@ -27,7 +26,7 @@ type GroupedRow = {
   label: string;
   count: number;
   revenue: number;
-  material_cost: number;
+  material_cost_visible: number;             // ← 이름을 visible 기준으로 맞춤
   daily_wage: number;
   extra_cost: number;
   employee_id?: string | null;
@@ -38,7 +37,7 @@ type Grouped = {
   total: GroupedRow;
 };
 
-type Mode = 'daily' | 'weekly' | 'monthly' | 'employee';
+type Mode = 'daily' | 'monthly' | 'employee';
 type Metric = 'revenue' | 'net' | 'daily_wage';
 
 export default function ReportsPage() {
@@ -47,9 +46,11 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
 
   const [isAdmin, setIsAdmin] = useState(false);
-  const [hasFinanceCols, setHasFinanceCols] = useState<boolean | null>(null); // null=미확인
+  const [isManager, setIsManager] = useState(false);         // ← 추가
+  const isElevated = isAdmin || isManager;                   // ← 관리자 or 매니저
+  const [hasFinanceCols, setHasFinanceCols] = useState<boolean | null>(null);
 
-  // 현재 로그인 사용자 정보(자기 일정만 보이기용)
+  // 현재 로그인 사용자 정보(직원 모드에서 본인 필터에 사용)
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
 
@@ -65,7 +66,7 @@ export default function ReportsPage() {
   // 직원별 보기에서 사용할 "직원 선택" (소문자 key, 'all' 포함)
   const [empNameFilter, setEmpNameFilter] = useState<string>('all');
 
-  // 관리자/사용자 판별 + 사용자 프로필 이름 로드
+  // 관리자/매니저 판별 + 사용자 프로필 이름 로드
   useEffect(() => {
     (async () => {
       const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
@@ -73,22 +74,23 @@ export default function ReportsPage() {
       const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
         .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session} } = await supabase.auth.getSession();
       const uid = session?.user?.id ?? '';
       const email = (session?.user?.email ?? '').toLowerCase();
       setUserId(uid || null);
       setIsAdmin((!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email)));
 
-      // 이름은 profiles 테이블에서 우선 조회 (display_name/full_name/name 순)
+      // 프로필에서 매니저 플래그 & 이름
       let name: string | null = null;
       if (uid) {
         const prof = await supabase
           .from('profiles')
-          .select('display_name, full_name, name')
+          .select('display_name, full_name, name, is_manager')
           .eq('id', uid)
           .maybeSingle();
         if (!prof.error) {
           name = (prof.data?.display_name || prof.data?.full_name || prof.data?.name || '').trim() || null;
+          if (prof.data?.is_manager) setIsManager(true); // ← 매니저 플래그
         }
       }
       // 메타데이터 fallback
@@ -103,26 +105,25 @@ export default function ReportsPage() {
     })();
   }, []);
 
-  // 데이터 로드 (재무 컬럼 포함 → 실패 시 폴백)
+  // 데이터 로드 (보안 뷰)
   useEffect(() => {
     (async () => {
       setLoading(true);
       setMsg(null);
 
-      // 읽기는 뷰로 (관리자=실값, 비관리자=뷰에서 적절 처리)
-      const sel1 =
-        'id,title,start_ts,end_ts,employee_id,employee_name,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
+      const sel =
+        'id,employee_id,employee_name,work_date,revenue,daily_wage,extra_cost,material_cost_visible,net_profit_visible';
 
       let { data, error } = await supabase
-        .from('schedules_secure') // 테이블이 아니라 보안 뷰 사용 권장
-        .select(sel1)
-        .order('start_ts', { ascending: true })
+        .from('reports_secure')
+        .select(sel)
+        .order('work_date', { ascending: false })
         .returns<Row[]>();
 
       if (error) {
         setHasFinanceCols(false);
-        // 폴백 최소 컬럼
-        const sel2 = 'id,title,start_ts,end_ts,employee_id,employee_name';
+        // 폴백 최소 컬럼 (schedules_secure를 쓰되, 여기선 표/그래프 최소 표시만)
+        const sel2 = 'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
         const fb = await supabase
           .from('schedules_secure')
           .select(sel2)
@@ -139,28 +140,28 @@ export default function ReportsPage() {
     })();
   }, []);
 
-  // ✅ 권한 기반 1차 필터(관리자 제외: 본인 것만)
+  // ✅ 권한 기반 1차 필터
+  //   - 관리자/매니저: 전사 데이터 열람
+  //   - 직원: 본인 것만
   const rowsForUser = useMemo(() => {
-    if (isAdmin) return rows;
+    if (isElevated) return rows;
     const uid = (userId ?? '').trim();
     const uname = normalizeName(userName);
-    if (!uid && !uname) return []; // 인증정보 없으면 아무 것도 안보임
-
+    if (!uid && !uname) return [];
     return rows.filter(r => {
-      // employee_id 일치 또는 employee_name(정규화) 일치 시 본인 것으로 간주
       const matchId = !!uid && (r.employee_id ?? '').trim() === uid;
       const matchName = !!uname && normalizeName(r.employee_name) === uname;
       return matchId || matchName;
     });
-  }, [rows, isAdmin, userId, userName]);
+  }, [rows, isElevated, userId, userName]);
 
-  // 날짜로 2차 필터
+  // 날짜로 2차 필터 (work_date 기준)
   const filteredByDate = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
     if (!s || !e) return rowsForUser;
     return rowsForUser.filter(r => {
-      const d = safeParse(r.start_ts);
+      const d = parseDateInput((r.work_date ?? '').toString());
       if (!d) return false;
       return !isBefore(d, s) && !isAfter(d, e);
     });
@@ -177,7 +178,7 @@ export default function ReportsPage() {
   }, [filteredByDate]);
 
   // 직원별 모드에서 추가 직원 필터 적용
-  const filteredForGrouping = useMemo(() => {
+  const filteredForBranding = useMemo(() => {
     if (mode !== 'employee' || empNameFilter === 'all') return filteredByDate;
     const target = empNameFilter;
     return filteredByDate.filter(r => (((r.employee_name ?? '').trim()) || '(미지정)').toLowerCase() === target);
@@ -185,11 +186,10 @@ export default function ReportsPage() {
 
   // 테이블용 그룹핑
   const grouped: Grouped = useMemo(() => {
-    if (mode === 'employee') return groupByEmployee(filteredForGrouping);
-    if (mode === 'weekly')   return groupByWeek(filteredForGrouping);
-    if (mode === 'monthly')  return groupByMonth(filteredForGrouping);
-    return groupByDay(filteredForGrouping);
-  }, [filteredForGrouping, mode]);
+    if (mode === 'employee') return groupByEmployee(filteredForBranding);
+    if (mode === 'monthly')  return groupByMonth(filteredByDate);
+    return groupByDay(filteredByDate);
+  }, [filteredForBranding, filteredByDate, mode]);
 
   // (중요) 비관리자는 net 선택 시 강제로 revenue로 대체
   const metricSafe: Metric = useMemo(
@@ -197,13 +197,12 @@ export default function ReportsPage() {
     [isAdmin, metric]
   );
 
-  // 그래프: 항상 "일자별 X축"
+  // 그래프: 항상 "일자별 X축" (work_date 사용)
   const chartDaily = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
     if (!s || !e) return { labels: [] as string[], values: [] as number[] };
 
-    // 직원별 모드에서 특정 직원 선택 시 해당 직원만 반영
     const baseRows = (mode === 'employee' && empNameFilter !== 'all')
       ? filteredByDate.filter(r => (((r.employee_name ?? '').trim()) || '(미지정)').toLowerCase() === empNameFilter)
       : filteredByDate;
@@ -216,15 +215,15 @@ export default function ReportsPage() {
       const key = format(d, 'yyyy-MM-dd');
       let sum = 0;
       for (const r of baseRows) {
-        const rd = safeParse(r.start_ts);
+        const rd = parseDateInput((r.work_date ?? '').toString());
         if (!rd) continue;
         const k = format(rd, 'yyyy-MM-dd');
         if (k !== key) continue;
 
         if (metricSafe === 'net') {
-          // 관리자만 net 집계
+          // 관리자만 net 집계 (DB에서 계산된 net_profit_visible 사용)
           if (!isAdmin) continue;
-          sum += computeNet(r);
+          sum += num(r.net_profit_visible);
         } else if (metricSafe === 'revenue') {
           sum += num(r.revenue);
         } else if (metricSafe === 'daily_wage') {
@@ -255,7 +254,7 @@ export default function ReportsPage() {
     const payMonth = sameMonth ? format(s, 'yyyy-MM') : `${dateFrom}~${dateTo}`;
 
     // 직원별 집계 (현재 모드의 직원 필터도 반영)
-    const byEmp = groupByEmployee(filteredForGrouping);
+    const byEmp = groupByEmployee(filteredByDate);
 
     // 이름→ID 해석 시도(스케줄 전체에서 단일 ID면 채택)
     const needResolve = byEmp.rows.filter(r => !r.employee_id).map(r => r.label);
@@ -302,7 +301,6 @@ export default function ReportsPage() {
     const records = Array.from(dedup.values());
 
     try {
-      // 업서트 대신: 키로 정확히 삭제 후 단일 삽입
       for (const r of records) {
         if (r.employee_id) {
           const del = await supabase
@@ -358,7 +356,6 @@ export default function ReportsPage() {
                   onChange={e => { setMode(e.target.value as Mode); }}
                 >
                   <option value="daily">일별</option>
-                  <option value="weekly">주별</option>
                   <option value="monthly">월별</option>
                   <option value="employee">직원별</option>
                 </select>
@@ -516,7 +513,7 @@ function TableReport({
         </thead>
         <tbody>
           {data.rows.map(r => {
-            const net = computeNet(r);
+            const net = computeNetGrouped(r); // ← 그룹 기준 순수익 계산
             return (
               <tr key={r.key} className="hover:bg-sky-50/50">
                 <td className="border border-sky-100 px-2 py-1 text-sm">{r.label}</td>
@@ -525,7 +522,7 @@ function TableReport({
 
                 {/* 자재비: 비관리자 마스킹 */}
                 <td className="border border-sky-100 px-2 py-1 text-sm">
-                  {isAdmin ? fmtMoney(r.material_cost) : '***'}
+                  {isAdmin ? fmtMoney(r.material_cost_visible) : '***'}
                 </td>
 
                 <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.daily_wage)}</td>
@@ -541,14 +538,14 @@ function TableReport({
         </tbody>
         <tfoot className="bg-sky-50">
           {(() => {
-            const totalNet = computeNet(data.total);
+            const totalNet = computeNetGrouped(data.total);
             return (
               <tr>
                 <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">합계</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{data.total.count}</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.revenue)}</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">
-                  {isAdmin ? fmtMoney(data.total.material_cost) : '***'}
+                  {isAdmin ? fmtMoney(data.total.material_cost_visible) : '***'}
                 </td>
                 <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.daily_wage)}</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.extra_cost)}</td>
@@ -673,7 +670,7 @@ function groupByEmployee(rows: Row[]): Grouped {
         label: name,
         count: 0,
         revenue: 0,
-        material_cost: 0,
+        material_cost_visible: 0,
         daily_wage: 0,
         extra_cost: 0,
         employee_id: null,
@@ -683,10 +680,10 @@ function groupByEmployee(rows: Row[]): Grouped {
     }
     const g = map.get(norm)!;
     g.count += 1;
-    g.revenue       += num(r.revenue);
-    g.material_cost += num(r.material_cost);
-    g.daily_wage    += num(r.daily_wage);
-    g.extra_cost    += num(r.extra_cost);
+    g.revenue                 += num(r.revenue);
+    g.material_cost_visible   += num(r.material_cost_visible); // ← visible만 합산
+    g.daily_wage              += num(r.daily_wage);
+    g.extra_cost              += num(r.extra_cost);
 
     const id = (r.employee_id ?? '').trim();
     if (id) g._ids.add(id);
@@ -701,7 +698,7 @@ function groupByEmployee(rows: Row[]): Grouped {
       label: g.label,
       count: g.count,
       revenue: g.revenue,
-      material_cost: g.material_cost,
+      material_cost_visible: g.material_cost_visible,
       daily_wage: g.daily_wage,
       extra_cost: g.extra_cost,
       employee_id,
@@ -717,23 +714,23 @@ function groupByEmployee(rows: Row[]): Grouped {
 function group(rows: Row[], keyOf: (d: Date) => string): Grouped {
   const map = new Map<string, GroupedRow>();
   for (const r of rows) {
-    const d = safeParse(r.start_ts);
+    const d = parseDateInput((r.work_date ?? '').toString()); // ← work_date 사용
     if (!d) continue;
     const key = keyOf(d);
     if (!map.has(key)) map.set(key, emptyGroup(key, key));
     const g = map.get(key)!;
     g.count += 1;
-    g.revenue       += num(r.revenue);
-    g.material_cost += num(r.material_cost);
-    g.daily_wage    += num(r.daily_wage);
-    g.extra_cost    += num(r.extra_cost);
+    g.revenue               += num(r.revenue);
+    g.material_cost_visible += num(r.material_cost_visible);
+    g.daily_wage            += num(r.daily_wage);
+    g.extra_cost            += num(r.extra_cost);
   }
   const list = Array.from(map.values()).sort((a,b)=>a.key.localeCompare(b.key));
   const total = list.reduce(sumGroups, emptyGroup('TOTAL','TOTAL'));
   return { rows: list, total };
 }
 function emptyGroup(key:string, label:string): GroupedRow {
-  return { key, label, count:0, revenue:0, material_cost:0, daily_wage:0, extra_cost:0 };
+  return { key, label, count:0, revenue:0, material_cost_visible:0, daily_wage:0, extra_cost:0 };
 }
 function sumGroups(acc: GroupedRow, r: GroupedRow): GroupedRow {
   return {
@@ -741,15 +738,16 @@ function sumGroups(acc: GroupedRow, r: GroupedRow): GroupedRow {
     label: 'TOTAL',
     count: acc.count + r.count,
     revenue: acc.revenue + r.revenue,
-    material_cost: acc.material_cost + r.material_cost,
+    material_cost_visible: acc.material_cost_visible + r.material_cost_visible,
     daily_wage: acc.daily_wage + r.daily_wage,
     extra_cost: acc.extra_cost + r.extra_cost,
   };
 }
 
-// 순수익 계산(현재 로직 유지: revenue - material_cost - daily_wage + extra_cost/2)
-function computeNet(x: {revenue?:number|null; material_cost?:number|null; daily_wage?:number|null; extra_cost?:number|null}) {
-  return num(x.revenue) - num(x.material_cost) - num(x.daily_wage) + num(x.extra_cost) / 2;
+// 그룹 단위 순수익: 관리자일 때만 쓰임(표시도 관리자만)
+function computeNetGrouped(x: {revenue:number; material_cost_visible:number; daily_wage:number; extra_cost:number}) {
+  // DB의 net_profit_visible은 행 단위라 그룹엔 없음 → 관리자인 경우에 한해 가감식으로 계산
+  return num(x.revenue) - num(x.material_cost_visible) - num(x.daily_wage) - num(x.extra_cost);
 }
 
 function fmtMoney(n: number) {
@@ -759,9 +757,11 @@ function fmtMoney(n: number) {
   } catch { return `${Math.round(n).toLocaleString()}원`; }
 }
 function num(v: number | null | undefined) { const x = Number(v ?? 0); return Number.isFinite(x) ? x : 0; }
-function safeParse(iso: string | null | undefined) {
-  if (!iso) return null;
-  const d = parseISO(iso);
+
+// 날짜 파서 (YYYY-MM-DD)
+function parseDateInput(s: string) {
+  if (!s) return null;
+  const d = new Date(s + 'T00:00:00');
   return isNaN(+d) ? null : d;
 }
 function toDateInputValue(d: Date) {
@@ -769,11 +769,6 @@ function toDateInputValue(d: Date) {
   const mm = String(d.getMonth()+1).padStart(2,'0');
   const dd = String(d.getDate()).padStart(2,'0');
   return `${yyyy}-${mm}-${dd}`;
-}
-function parseDateInput(s: string) {
-  if (!s) return null;
-  const d = new Date(s + 'T00:00:00');
-  return isNaN(+d) ? null : d;
 }
 
 // 월~일 주차 계산용
@@ -796,7 +791,9 @@ function weekIndex(monday: Date) {
   return idx;
 }
 
-/** schedules 전체에서 같은 이름의 employee_id가 "정확히 1개"면 그 ID 반환 */
+/** schedules 전체에서 같은 이름의 employee_id가 "정확히 1개"면 그 ID 반환
+ *  (주의: schedules에 대한 RLS가 읽기를 허용해야 동작합니다)
+ */
 async function resolveEmployeeIdByName(name: string): Promise<string | null> {
   const trimmed = (name ?? '').trim();
   if (!trimmed) return null;

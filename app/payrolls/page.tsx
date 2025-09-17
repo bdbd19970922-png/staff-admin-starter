@@ -192,14 +192,13 @@ export default function Page() {
     return Array.from(map.values()).sort((a, b) => a.employee_name.localeCompare(b.employee_name, 'ko'));
   }, [filtered]);
 
-  /* ===== 지급완료 가능 조건 ===== */
+  /* ===== (기존) 지급완료 가능 조건 문구는 유지하되, 실제 동작은 모달에서 날짜 선택 ===== */
   const today = new Date();
   const todayDay = today.getDate();
   const allowedDay = [10, 20, 30].includes(todayDay);
-  const canMarkPaid = (rowId: string | number) => {
-    const st = edit[rowId];
-    if (st && st.paidDate) return true;
-    return allowedDay;
+  const canMarkPaid = (_rowId: string | number) => {
+    // 버튼 활성화는 모달을 띄우므로 항상 true 로 둔다 (UI 문구만 유지)
+    return true;
   };
 
   /* ===== 액션: 메모/지급일 변경/저장/지급완료/삭제 ===== */
@@ -223,13 +222,15 @@ export default function Page() {
     }
   };
 
-  const markPaid = async (row: PayrollRow) => {
+  // 기존 markPaid를 날짜 인자를 받도록 확장
+  const markPaid = async (row: PayrollRow, pickedDate?: string) => {
     const st = edit[row.id] ?? { memo: row.memo ?? '', paidDate: '' };
-    if (!canMarkPaid(row.id)) {
-      alert('지급일을 선택하거나, 오늘이 10/20/30일일 때만 지급완료가 가능합니다.');
+    const useDate = pickedDate || st.paidDate || '';
+    if (!useDate) {
+      alert('지급일을 선택해주세요.');
       return;
     }
-    const paid_at = st.paidDate ? toISODateMid(st.paidDate) : new Date().toISOString();
+    const paid_at = toISODateMid(useDate);
     setEdit(s => ({ ...s, [row.id]: { ...st, saving: true } }));
     try {
       const { error } = await supabase
@@ -264,6 +265,34 @@ export default function Page() {
     } catch (e: any) {
       setMsg(`삭제 실패: ${e?.message ?? '알 수 없는 오류'}`);
     }
+  };
+
+  /* ===== 지급완료 모달 상태 ===== */
+  const [paidModal, setPaidModal] = useState<{
+    open: boolean;
+    row: PayrollRow | null;
+    date: string; // YYYY-MM-DD
+  }>({ open: false, row: null, date: '' });
+
+  const openPaidModal = (row: PayrollRow) => {
+    const st = edit[row.id];
+    const todayStr = toYMD(new Date());
+    setPaidModal({
+      open: true,
+      row,
+      date: (st?.paidDate && /^\d{4}-\d{2}-\d{2}$/.test(st.paidDate)) ? st.paidDate : todayStr,
+    });
+  };
+  const closePaidModal = () => setPaidModal({ open: false, row: null, date: '' });
+
+  const confirmPaidModal = async () => {
+    if (!paidModal.row) return;
+    if (!paidModal.date) {
+      alert('지급일을 선택해주세요.');
+      return;
+    }
+    await markPaid(paidModal.row, paidModal.date);
+    closePaidModal();
   };
 
   return (
@@ -343,19 +372,49 @@ export default function Page() {
             setRowMemo={setRowMemo}
             setRowPaidDate={setRowPaidDate}
             saveMemo={saveMemo}
-            markPaid={markPaid}
+            // 버튼 클릭 시 모달 열기
+            openPaidModal={openPaidModal}
             canMarkPaid={canMarkPaid}
             onDelete={deleteRow}
           />
         )}
       </section>
+
+      {/* ===== 지급완료 모달 ===== */}
+      {paidModal.open && (
+        <Modal onClose={closePaidModal} title="지급완료">
+          <div className="space-y-3">
+            <div className="text-sm text-slate-700">
+              지급일을 선택해 주세요. (언제든 선택 가능)
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-slate-600 w-20">지급일</label>
+              <input
+                type="date"
+                className="input w-[170px]"
+                value={paidModal.date}
+                onChange={e => setPaidModal(s => ({ ...s, date: e.target.value }))}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="btn" onClick={closePaidModal}>취소</button>
+              <button
+                className="btn bg-slate-900 text-white hover:bg-slate-800"
+                onClick={confirmPaidModal}
+              >
+                지급완료
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
 /* ============ 목록 테이블(행별 편집) ============ */
 function ListTable({
-  rows, edit, isAdmin, setRowMemo, setRowPaidDate, saveMemo, markPaid, canMarkPaid, onDelete,
+  rows, edit, isAdmin, setRowMemo, setRowPaidDate, saveMemo, openPaidModal, canMarkPaid, onDelete,
 }: {
   rows: PayrollRow[];
   edit: Record<string | number, { memo: string; paidDate: string; saving?: boolean }>;
@@ -363,7 +422,7 @@ function ListTable({
   setRowMemo: (id: string | number, memo: string) => void;
   setRowPaidDate: (id: string | number, paidDate: string) => void;
   saveMemo: (row: PayrollRow) => Promise<void>;
-  markPaid: (row: PayrollRow) => Promise<void>;
+  openPaidModal: (row: PayrollRow) => void;
   canMarkPaid: (rowId: string | number) => boolean;
   onDelete: (row: PayrollRow) => Promise<void>;
 }) {
@@ -425,8 +484,8 @@ function ListTable({
                       <button
                         className={`btn ${canMarkPaid(r.id) ? 'bg-slate-900 text-white hover:bg-slate-800' : 'opacity-50'}`}
                         disabled={saving || !canMarkPaid(r.id)}
-                        onClick={() => markPaid(r)}
-                        title="지급완료(지급일 선택 또는 10/20/30일)"
+                        onClick={() => openPaidModal(r)}
+                        title="지급완료(모달에서 날짜 선택)"
                       >
                         지급완료
                       </button>
@@ -501,6 +560,32 @@ function EmployeeTable({
   );
 }
 
+/* ===== 공통 모달 컴포넌트 (가벼운 구현) ===== */
+function Modal({
+  title, children, onClose,
+}: {
+  title?: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative w-[90vw] max-w-[480px] rounded-2xl bg-white shadow-2xl border border-slate-200 p-4">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-base font-semibold text-slate-900">{title ?? 'Modal'}</h2>
+          <button className="text-slate-400 hover:text-slate-600" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 /* ============ 공통 소품/유틸 ============ */
 // ⬇️ 표준 HTML 속성(colSpan 등) 전부 지원
 function Th(props: React.ThHTMLAttributes<HTMLTableHeaderCellElement>) {
@@ -552,4 +637,10 @@ function toISODateMid(dateStr: string) {
     const local = new Date(y, (m ?? 1) - 1, d ?? 1, 9, 0, 0); // 오전 9시
     return local.toISOString();
   } catch { return new Date().toISOString(); }
+}
+function toYMD(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
