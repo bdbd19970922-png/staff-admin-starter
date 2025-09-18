@@ -18,7 +18,7 @@ async function waitForAuthReady(maxTries = 6, delayMs = 300) {
   return data?.session ?? null;
 }
 
-/* ====== 타입/라벨 정의 ====== */
+/* ====== 화면 Row 타입/라벨 ====== */
 type Row = {
   id: number;
   title: string;
@@ -37,6 +37,22 @@ const STATUS_LABEL: Record<Row['status'], string> = {
   in_progress: '진행중',
   done: '완료',
   cancelled: '취소',
+};
+
+/* ====== 보안뷰 결과 타입 ====== */
+type SchedulesSecureRow = {
+  id: number;
+  title: string | null;
+  start_ts: string;
+  end_ts: string;
+  employee_id: string | null;
+  employee_name: string | null;
+  off_day: boolean | null;
+  daily_wage: number | null;
+  revenue: number | null;
+  material_cost: number | null;
+  extra_cost: number | null;
+  net_profit_visible: number | null;
 };
 
 /* ===============================
@@ -81,7 +97,7 @@ function LoggedOutScreen() {
 }
 
 /* =====================================
-   자식: 스케줄 CRUD + 목록 표시
+   자식: 스케줄 생성/삭제 + 목록/필터 표시
    ===================================== */
 function SchedulesInner() {
   // 권한/사용자
@@ -91,12 +107,15 @@ function SchedulesInner() {
   const [isManager, setIsManager] = useState(false);
   const isElevated = isAdmin || isManager; // 관리자 or 매니저
 
+  // 생성용 직원 선택
   const [emp, setEmp] = useState<EmployeeValue>({ mode: 'profile', employeeId: '' });
 
+  // 목록/상태
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
+  // 폼
   const [formOpen, setFormOpen] = useState(false);
   const [f, setF] = useState({
     title: '',
@@ -106,6 +125,10 @@ function SchedulesInner() {
     daily_wage: 0,
     status: 'scheduled' as Row['status'],
   });
+
+  // 보기(필터): 직원별 보기 기능
+  const [viewEmp, setViewEmp] = useState<EmployeeValue>({ mode: 'profile', employeeId: '' });
+  const [onlyMine, setOnlyMine] = useState(false);
 
   function toISO(local: string) {
     if (!local) return new Date().toISOString();
@@ -153,29 +176,54 @@ function SchedulesInner() {
     try {
       await waitForAuthReady();
 
-      // 기본 쿼리
+      // 기본 쿼리(읽기는 보안뷰)
       let query = supabase
-        .from('schedules')
-        .select('id,title,location,start_ts,end_ts,daily_wage,status,employee_id,employee_name,employee_phone')
+        .from('schedules_secure')
+        .select('id,title,start_ts,end_ts,employee_id,employee_name,off_day,daily_wage,revenue,material_cost,extra_cost,net_profit_visible')
         .order('start_ts', { ascending: false })
         .limit(100);
 
-      // ❗권한 적용: 직원은 본인 것만
+      // 직원 모드: 본인 것만(서버 RLS도 걸리지만 친절용)
       if (!isElevated) {
         if (uid) {
           query = query.eq('employee_id', uid);
         } else if (fullName) {
           query = query.ilike('employee_name', `%${fullName}%`);
         } else {
-          // 둘 다 없으면 아무 것도 안 보이게 (안전장치)
-          query = query.eq('id', -1);
+          query = query.eq('id', -1); // 안전장치
         }
       }
 
-      const { data, error } = await query;
+      // 승격 계정에서 “직원별 보기” 필터
+      if (isElevated) {
+        if (onlyMine && uid) {
+          query = query.eq('employee_id', uid);
+        } else if (viewEmp.mode === 'profile' && viewEmp.employeeId) {
+          query = query.eq('employee_id', viewEmp.employeeId);
+        } else if (viewEmp.mode === 'manual' && viewEmp.name?.trim()) {
+          query = query.ilike('employee_name', `%${viewEmp.name.trim()}%`);
+        }
+        // 아무것도 선택 안 하면 전사(기본)
+      }
+
+      const { data, error } = await query.returns<SchedulesSecureRow[]>();
       if (error) throw error;
 
-      setRows((data as Row[]) ?? []);
+      // 보안뷰 결과 → 화면 Row로 변환(없는 필드 기본값 보충)
+      const mapped: Row[] = (data ?? []).map((r) => ({
+        id: r.id,
+        title: r.title ?? '',
+        location: '-',                                   // 뷰에 없음
+        status: r.off_day ? 'off' as any : 'scheduled', // 간단 추론/기본값
+        start_ts: r.start_ts,
+        end_ts: r.end_ts,
+        daily_wage: r.daily_wage ?? 0,
+        employee_id: r.employee_id ?? null,
+        employee_name: r.employee_name ?? '',
+        employee_phone: null,                            // 뷰에 없음
+      }));
+
+      setRows(mapped);
     } catch (e: any) {
       setMsg(e?.message || '데이터 로딩 중 오류가 발생했습니다.');
       setRows([]);
@@ -185,10 +233,10 @@ function SchedulesInner() {
   }
 
   useEffect(() => {
-    // 권한/uid가 준비된 다음 호출되도록 의존성 포함
+    // 권한/uid/필터가 바뀔 때마다 재조회
     loadRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isElevated, uid, fullName]);
+  }, [isElevated, uid, fullName, viewEmp, onlyMine]);
 
   async function onCreate() {
     setMsg(null);
@@ -208,13 +256,12 @@ function SchedulesInner() {
         employee_phone: null,
       };
 
-      // ❗권한 방어: 직원은 무조건 본인에게만 배정
+      // 직원은 본인에게만
       if (!isElevated) {
         if (!uid) {
           setMsg('세션을 다시 확인해주세요.');
           return;
         }
-        // profiles에서 이름/전화 가져와 채워줌
         const { data: p } = await supabase
           .from('profiles')
           .select('full_name,phone')
@@ -225,7 +272,7 @@ function SchedulesInner() {
         payload.employee_name = (p?.full_name ?? fullName ?? '').trim() || null;
         payload.employee_phone = (p?.phone ?? '').trim() || null;
       } else {
-        // 관리자/매니저는 기존 EmployeePicker 동작 유지
+        // 관리자/매니저는 선택에 따라
         if (emp.mode === 'profile') {
           if (!emp.employeeId) {
             setMsg('직원을 선택해주세요.');
@@ -264,11 +311,10 @@ function SchedulesInner() {
   }
 
   async function onDelete(id: number, row: Row) {
-    // ❗권한 방어: 직원은 본인 일정만 삭제 가능
+    // 직원은 본인 일정만 삭제 가능(서버 RLS가 최종 방어)
     if (!isElevated) {
       const ownerId = (row.employee_id ?? '').trim();
-      const ok = ownerId && uid && ownerId === uid;
-      if (!ok) {
+      if (!(ownerId && uid && ownerId === uid)) {
         setMsg('본인 일정만 삭제할 수 있습니다.');
         return;
       }
@@ -300,14 +346,39 @@ function SchedulesInner() {
 
         {/* 상단 액션 */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setFormOpen((v) => !v)}
-            className="btn-primary"
-          >
+          <button onClick={() => loadRows()} className="btn">새로고침</button>
+          <button onClick={() => setFormOpen((v) => !v)} className="btn-primary">
             {formOpen ? '등록 폼 닫기' : '+ 새 일정'}
           </button>
         </div>
       </div>
+
+      {/* 보기 필터: 직원별 보기 */}
+      <section className="card">
+        <div className="flex flex-col md:flex-row items-start md:items-end gap-3">
+          {isElevated ? (
+            <>
+              <div className="grow">
+                <EmployeePicker label="직원별 보기(선택 시 해당 직원만)" value={viewEmp} onChange={setViewEmp} />
+              </div>
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input type="checkbox" className="checkbox"
+                  checked={onlyMine}
+                  onChange={(e) => setOnlyMine(e.target.checked)} />
+                내 것만 보기
+              </label>
+              <button className="btn" onClick={() => { setViewEmp({ mode: 'profile', employeeId: '' }); setOnlyMine(false); }}>
+                필터 초기화
+              </button>
+            </>
+          ) : (
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" className="checkbox" checked readOnly />
+              직원 모드: 본인 일정만 표시됩니다
+            </label>
+          )}
+        </div>
+      </section>
 
       {/* 인라인 등록 폼 */}
       {formOpen && (
@@ -315,22 +386,12 @@ function SchedulesInner() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="md:col-span-2">
               <label className="mb-1 block text-sm text-slate-600">제목</label>
-              <input
-                className="input"
-                value={f.title}
-                onChange={(e) => setF({ ...f, title: e.target.value })}
-                placeholder="작업 제목"
-              />
+              <input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="작업 제목" />
             </div>
 
             <div className="md:col-span-2">
               <label className="mb-1 block text-sm text-slate-600">장소</label>
-              <input
-                className="input"
-                value={f.location}
-                onChange={(e) => setF({ ...f, location: e.target.value })}
-                placeholder="유성구 봉명동..."
-              />
+              <input className="input" value={f.location} onChange={(e) => setF({ ...f, location: e.target.value })} placeholder="유성구 봉명동..." />
             </div>
 
             {/* 직원 선택/직접입력: 승격 계정만 노출(직원은 본인 고정) */}
@@ -342,42 +403,22 @@ function SchedulesInner() {
 
             <div>
               <label className="mb-1 block text-sm text-slate-600">시작</label>
-              <input
-                type="datetime-local"
-                className="input"
-                value={f.start_ts}
-                onChange={(e) => setF({ ...f, start_ts: e.target.value })}
-              />
+              <input type="datetime-local" className="input" value={f.start_ts} onChange={(e) => setF({ ...f, start_ts: e.target.value })} />
             </div>
 
             <div>
               <label className="mb-1 block text-sm text-slate-600">종료</label>
-              <input
-                type="datetime-local"
-                className="input"
-                value={f.end_ts}
-                onChange={(e) => setF({ ...f, end_ts: e.target.value })}
-              />
+              <input type="datetime-local" className="input" value={f.end_ts} onChange={(e) => setF({ ...f, end_ts: e.target.value })} />
             </div>
 
             <div>
               <label className="mb-1 block text-sm text-slate-600">일당(₩)</label>
-              <input
-                type="number"
-                className="input"
-                value={f.daily_wage}
-                onChange={(e) => setF({ ...f, daily_wage: Number(e.target.value || 0) })}
-                min={0}
-              />
+              <input type="number" className="input" value={f.daily_wage} onChange={(e) => setF({ ...f, daily_wage: Number(e.target.value || 0) })} min={0} />
             </div>
 
             <div>
               <label className="mb-1 block text-sm text-slate-600">상태</label>
-              <select
-                className="select"
-                value={f.status}
-                onChange={(e) => setF({ ...f, status: e.target.value as Row['status'] })}
-              >
+              <select className="select" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value as Row['status'] })}>
                 <option value="scheduled">{STATUS_LABEL.scheduled} (예정)</option>
                 <option value="in_progress">{STATUS_LABEL.in_progress} (작업 중)</option>
                 <option value="done">{STATUS_LABEL.done} (완료)</option>
@@ -393,21 +434,15 @@ function SchedulesInner() {
           ) : null}
 
           <div className="mt-5 flex gap-2">
-            <button onClick={onCreate} className="btn-primary px-5">
-              등록
-            </button>
-            <button onClick={() => setFormOpen(false)} className="btn">
-              취소
-            </button>
+            <button onClick={onCreate} className="btn-primary px-5">등록</button>
+            <button onClick={() => setFormOpen(false)} className="btn">취소</button>
           </div>
         </section>
       )}
 
       {/* 메시지 (폼 닫힌 상태) */}
       {msg && !formOpen ? (
-        <div className="card border-rose-200 bg-rose-50 text-rose-700 text-sm">
-          {msg}
-        </div>
+        <div className="card border-rose-200 bg-rose-50 text-rose-700 text-sm">{msg}</div>
       ) : null}
 
       {/* 목록 */}
@@ -452,9 +487,7 @@ function SchedulesInner() {
                     <td className="p-2 whitespace-nowrap">{fmtLocal(r.start_ts)}</td>
                     <td className="p-2 whitespace-nowrap">{fmtLocal(r.end_ts)}</td>
                     <td className="p-2 text-right whitespace-nowrap">₩{Number(r.daily_wage || 0).toLocaleString()}</td>
-                    <td className="p-2">
-                      <StatusBadge status={r.status} />
-                    </td>
+                    <td className="p-2"><StatusBadge status={r.status} /></td>
                     <td className="p-2">
                       <div className="flex gap-2">
                         {/* 직원은 본인 일정만 수정/삭제 가능. 링크는 유지, 서버 RLS가 최종 방어 */}
@@ -467,7 +500,7 @@ function SchedulesInner() {
                 {rows.length === 0 && (
                   <tr>
                     <td className="p-2 text-sm text-slate-500" colSpan={8}>
-                      데이터가 없습니다. {isElevated ? '“+ 새 일정”으로 하나 추가해보세요.' : '관리자/매니저에게 일정을 배정받거나 “+ 새 일정”으로 본인 일정을 추가해보세요.'}
+                      데이터가 없습니다. {isElevated ? '필터를 조정하거나 “+ 새 일정”으로 추가해보세요.' : '관리자/매니저에게 일정을 배정받거나 “+ 새 일정”으로 본인 일정을 추가해보세요.'}
                     </td>
                   </tr>
                 )}
@@ -475,7 +508,9 @@ function SchedulesInner() {
               <tfoot>
                 <tr className="border-t bg-slate-50">
                   <td className="p-2 font-semibold" colSpan={5}>합계</td>
-                  <td className="p-2 font-extrabold text-right whitespace-nowrap">₩{totalWage.toLocaleString()}</td>
+                  <td className="p-2 font-extrabold text-right whitespace-nowrap">
+                    ₩{rows.reduce((s, r) => s + (Number(r.daily_wage) || 0), 0).toLocaleString()}
+                  </td>
                   <td className="p-2" colSpan={2} />
                 </tr>
               </tfoot>
@@ -495,7 +530,7 @@ function StatusBadge({ status }: { status: Row['status'] }) {
     done: { label: STATUS_LABEL.done, cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
     cancelled: { label: STATUS_LABEL.cancelled, cls: 'bg-rose-50 text-rose-700 border-rose-200' },
   };
-  const it = map[status];
+  const it = map[status] ?? map.scheduled;
   return (
     <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-semibold ${it.cls}`}>
       {it.label}

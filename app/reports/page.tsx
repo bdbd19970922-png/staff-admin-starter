@@ -77,46 +77,55 @@ export default function ReportsPage() {
   const [empNameFilter, setEmpNameFilter] = useState<string>('all');
 
   // ===== 권한/사용자명 로드 =====
-  useEffect(() => {
-    (async () => {
-      await waitForAuthReady();
+useEffect(() => {
+  (async () => {
+    await waitForAuthReady();
 
-      const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
-        .split(',').map(s => s.trim()).filter(Boolean);
-      const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
-        .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
+      .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-      const { data: { session } } = await supabase.auth.getSession();
-      const uid = session?.user?.id ?? '';
-      const email = (session?.user?.email ?? '').toLowerCase();
-      setUserId(uid || null);
-      setIsAdmin((!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email)));
+    const { data: { session } } = await supabase.auth.getSession();
+    const uid = session?.user?.id ?? '';
+    const email = (session?.user?.email ?? '').toLowerCase();
+    setUserId(uid || null);
 
-      // 프로필에서 매니저 플래그 & 이름
-      let name: string | null = null;
-      if (uid) {
-        const prof = await supabase
-          .from('profiles')
-          .select('display_name, full_name, name, is_manager, is_admin')
-          .eq('id', uid)
-          .maybeSingle();
-        if (!prof.error) {
-          name = (prof.data?.display_name || prof.data?.full_name || prof.data?.name || '').trim() || null;
-          if (prof.data?.is_manager) setIsManager(true);
-          if (prof.data?.is_admin) setIsAdmin(true); // DB is_admin도 인정
-        }
+    // 환경변수 기반 관리자 우선
+    let admin = (!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email));
+    let manager = false;
+
+    // ✅ 존재하는 컬럼만 사용 (display_name 금지)
+    let name: string | null = null;
+    if (uid) {
+      const { data: prof, error: profErr } = await supabase
+        .from('profiles')
+        .select('full_name, name, is_manager, is_admin')
+        .eq('id', uid)
+        .maybeSingle();
+
+      if (!profErr && prof) {
+        name = ((prof.full_name ?? prof.name ?? '') as string).trim() || null;
+        if (prof.is_manager) manager = true;
+        if (prof.is_admin)   admin = true; // DB 관리자도 인정
       }
-      // 메타데이터 fallback
-      if (!name) {
-        const metaName =
-          (session?.user?.user_metadata?.name ??
-            session?.user?.user_metadata?.full_name ??
-            session?.user?.user_metadata?.user_name) as string | undefined;
-        name = (metaName || '').trim() || null;
-      }
-      setUserName(name);
-    })();
-  }, []);
+    }
+
+    // 메타데이터 폴백
+    if (!name) {
+      const metaName =
+        (session?.user?.user_metadata?.name ??
+         session?.user?.user_metadata?.full_name ??
+         session?.user?.user_metadata?.user_name) as string | undefined;
+      name = (metaName || '').trim() || null;
+    }
+
+    setUserName(name);
+    setIsManager(manager);
+    setIsAdmin(admin);
+  })();
+}, []);
+
 
   // ===== 데이터 로드 (보안 뷰) =====
   useEffect(() => {

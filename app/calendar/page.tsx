@@ -598,120 +598,133 @@ export default function Page() {
 
       {/* ▶ 빠른 추가 모달 */}
       {showAdd.open && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w=[min(760px,94vw)] md:w-[min(760px,94vw)] p-5 shadow-2xl">
-            <div className="text-lg font-bold mb-2 text-sky-800">일정 추가</div>
+  <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div
+      className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(760px,94vw)] shadow-2xl flex flex-col"
+      style={{ maxHeight: '85vh' }}
+    >
+      {/* 헤더: 고정 */}
+      <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex items-center justify-between">
+        <div className="text-lg font-bold text-sky-800">일정 추가</div>
+        <button className="text-slate-500 hover:text-slate-800" onClick={() => setShowAdd({open:false, date:null})}>✕</button>
+      </div>
 
-            <Field label="작업내용">
-              <input className="input" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="예) 욕실 타일 보수 / 휴무 체크 시 자동 '휴무' 표기" />
-            </Field>
+      {/* 본문: 스크롤 */}
+      <div className="flex-1 overflow-y-auto px-5 py-4">
+        {/* === 여기부터 기존 폼 내용을 그대로 붙여넣기 === */}
+        <Field label="작업내용">
+          <input className="input" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="예) 욕실 타일 보수 / 휴무 체크 시 자동 '휴무' 표기" />
+        </Field>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-              <Field label="직원 이름 (여러 명 선택)">
-                <div className="space-y-2">
-                  <input
-                    className="input"
-                    placeholder="직원이름 검색"
-                    value={empSearch}
-                    onChange={(e) => setEmpSearch(e.target.value)}
-                  />
-                  <select
-                    className="select"
-                    multiple
-                    size={6}
-                    value={form.empNames}
-                    onChange={(e) => {
-                      const opts = Array.from(e.target.selectedOptions).map(o => o.value);
-                      setForm(f => ({ ...f, empNames: opts }));
-                    }}
-                  >
-                    {filteredEmpForAdd.map((name) => (<option key={name} value={name}>{name}</option>))}
-                  </select>
-                  <div className="text-[11px] text-slate-500">※ Ctrl(또는 Cmd) 키로 다중 선택</div>
-                </div>
-              </Field>
-
-              <Field label="고객이름">
-                <input className="input" value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} placeholder="예) 박OO" />
-              </Field>
-              <Field label="고객 번호">
-                <input className="input" value={form.customerPhone} onChange={e => setForm(f => ({ ...f, customerPhone: e.target.value }))} placeholder="010-1234-5678" />
-              </Field>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-              <Field label="현장주소">
-                <input className="input" value={form.siteAddress} onChange={e => setForm(f => ({ ...f, siteAddress: e.target.value }))} placeholder="서울시 ..." />
-              </Field>
-              <Field label="예약시간(시작)">
-                <input type="datetime-local" className="input" value={form.start} onChange={e => setForm(f => ({ ...f, start: e.target.value }))} />
-              </Field>
-              <Field label="휴무">
-                <label className="inline-flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={form.offDay}
-                    onChange={e => setForm(f => ({ ...f, offDay: e.target.checked }))}
-                  />
-                  <span className="text-slate-700">해당 일정은 직원 휴무</span>
-                </label>
-              </Field>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end mt-3">
-              <Field label="총작업비">
-                <input className="input" inputMode="numeric" value={form.total}
-                  onChange={e => { const v = int(e.target.value); setForm(f => ({ ...f, total: v, revenue: v })); }}
-                  placeholder="예) 500000" />
-              </Field>
-              <div className="md:col-span-2">
-                <button type="button" className="btn mr-2" onClick={() => setDetailsOpen(o => !o)}>
-                  {detailsOpen ? '상세 숨기기' : '상세 입력(총매출/자재비/인건비/기타)'}
-                </button>
-                <span className="text-xs text-slate-600">* 총작업비는 총매출(revenue)로 저장됩니다.</span>
-              </div>
-            </div>
-
-            {detailsOpen && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
-                <Field label="총매출">
-                  <input className="input" inputMode="numeric" value={form.revenue}
-                    onChange={e => { const v = int(e.target.value); setForm(f => ({ ...f, revenue: v, total: v })); }} />
-                </Field>
-                <Field label="자재비">
-                  <input className="input" inputMode="numeric" value={form.material}
-                    onChange={e => setForm(f => ({ ...f, material: int(e.target.value) }))} />
-                </Field>
-                <Field label="인건비">
-                  <input className="input" inputMode="numeric" value={form.wage}
-                    onChange={e => setForm(f => ({ ...f, wage: int(e.target.value) }))} />
-                </Field>
-                <Field label="기타비용">
-                  <input className="input" inputMode="numeric" value={form.extra}
-                    onChange={e => setForm(f => ({ ...f, extra: int(e.target.value) }))} />
-                </Field>
-              </div>
-            )}
-
-            {/* ✅ 자재 선택(추가 모달) */}
-            <div className="mt-4">
-              <MaterialsPicker
-                lines={matLines}
-                setLines={setMatLines}
-                materials={materials}
-                locations={locations}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+          <Field label="직원 이름 (여러 명 선택)">
+            <div className="space-y-2">
+              <input
+                className="input"
+                placeholder="직원이름 검색"
+                value={empSearch}
+                onChange={(e) => setEmpSearch(e.target.value)}
               />
+              <select
+                className="select"
+                multiple
+                size={6}
+                value={form.empNames}
+                onChange={(e) => {
+                  const opts = Array.from(e.target.selectedOptions).map(o => o.value);
+                  setForm(f => ({ ...f, empNames: opts }));
+                }}
+              >
+                {filteredEmpForAdd.map((name) => (<option key={name} value={name}>{name}</option>))}
+              </select>
+              <div className="text-[11px] text-slate-500">※ Ctrl(또는 Cmd) 키로 다중 선택</div>
             </div>
+          </Field>
 
-            <div className="flex gap-2 justify-end pt-4">
-              <button type="button" className="btn" onClick={() => setShowAdd({open:false, date:null})}>닫기</button>
-              <button type="button" className="btn-primary disabled:opacity-50" disabled={saving} onClick={saveNew}>
-                저장
-              </button>
-            </div>
+          <Field label="고객이름">
+            <input className="input" value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} placeholder="예) 박OO" />
+          </Field>
+          <Field label="고객 번호">
+            <input className="input" value={form.customerPhone} onChange={e => setForm(f => ({ ...f, customerPhone: e.target.value }))} placeholder="010-1234-5678" />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+          <Field label="현장주소">
+            <input className="input" value={form.siteAddress} onChange={e => setForm(f => ({ ...f, siteAddress: e.target.value }))} placeholder="서울시 ..." />
+          </Field>
+          <Field label="예약시간(시작)">
+            <input type="datetime-local" className="input" value={form.start} onChange={e => setForm(f => ({ ...f, start: e.target.value }))} />
+          </Field>
+          <Field label="휴무">
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.offDay}
+                onChange={e => setForm(f => ({ ...f, offDay: e.target.checked }))}
+              />
+              <span className="text-slate-700">해당 일정은 직원 휴무</span>
+            </label>
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end mt-3">
+          <Field label="총작업비">
+            <input className="input" inputMode="numeric" value={form.total}
+              onChange={e => { const v = int(e.target.value); setForm(f => ({ ...f, total: v, revenue: v })); }}
+              placeholder="예) 500000" />
+          </Field>
+          <div className="md:col-span-2">
+            <button type="button" className="btn mr-2" onClick={() => setDetailsOpen(o => !o)}>
+              {detailsOpen ? '상세 숨기기' : '상세 입력(총매출/자재비/인건비/기타)'}
+            </button>
+            <span className="text-xs text-slate-600">* 총작업비는 총매출(revenue)로 저장됩니다.</span>
           </div>
         </div>
-      )}
+
+        {detailsOpen && (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
+            <Field label="총매출">
+              <input className="input" inputMode="numeric" value={form.revenue}
+                onChange={e => { const v = int(e.target.value); setForm(f => ({ ...f, revenue: v, total: v })); }} />
+            </Field>
+            <Field label="자재비">
+              <input className="input" inputMode="numeric" value={form.material}
+                onChange={e => setForm(f => ({ ...f, material: int(e.target.value) }))} />
+            </Field>
+            <Field label="인건비">
+              <input className="input" inputMode="numeric" value={form.wage}
+                onChange={e => setForm(f => ({ ...f, wage: int(e.target.value) }))} />
+            </Field>
+            <Field label="기타비용">
+              <input className="input" inputMode="numeric" value={form.extra}
+                onChange={e => setForm(f => ({ ...f, extra: int(e.target.value) }))} />
+            </Field>
+          </div>
+        )}
+
+        {/* 자재 선택 영역(기존 그대로) */}
+        <div className="mt-4">
+          <MaterialsPicker
+            lines={matLines}
+            setLines={setMatLines}
+            materials={materials}
+            locations={locations}
+          />
+        </div>
+      </div>
+
+      {/* 푸터: 고정 (버튼 항상 보임) */}
+      <div className="sticky bottom-0 z-10 border-t border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex justify-end gap-2">
+        <button type="button" className="btn" onClick={() => setShowAdd({open:false, date:null})}>닫기</button>
+        <button type="button" className="btn-primary disabled:opacity-50" disabled={saving} onClick={saveNew}>
+          저장
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
 
       {/* ▶ 특정 날짜 전체 보기 모달 */}
       {showDay.open && showDay.date && (
@@ -991,17 +1004,28 @@ function DetailModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] p-5 shadow-2xl">
-        <div className="flex items-start justify-between mb-3">
-          <h2 className="text-lg font-bold text-sky-800">🗂️ 일정 {editing ? '수정' : '상세'}</h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-800">✕</button>
-        </div>
+  <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div
+      className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] shadow-2xl flex flex-col"
+      style={{ maxHeight: '85vh' }}
+    >
+      {/* 헤더: 고정 */}
+      <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex items-center justify-between">
+        <h2 className="text-lg font-bold text-sky-800">🗂️ 일정 {editing ? '수정' : '상세'}</h2>
+        <button onClick={onClose} className="text-slate-500 hover:text-slate-800">✕</button>
+      </div>
 
-        {err && <div className="mb-3 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2">{err}</div>}
+      {/* 본문: 스크롤 영역 */}
+      <div className="flex-1 overflow-y-auto px-5 py-4">
+        {err && (
+          <div className="mb-3 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2">
+            {err}
+          </div>
+        )}
 
         {!editing ? (
           <>
+            {/* === 상세 보기 (기존 내용 그대로 옮겨두세요) === */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Info label="작업내용" value={row.title || (effectiveOff(row) ? '휴무' : '(제목없음)')} />
               <Info label="직원" value={effectiveNames(row).join(', ') || '-'} />
@@ -1028,23 +1052,10 @@ function DetailModal({
                 )}
               </div>
             )}
-
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                onClick={onDelete}
-                disabled={deleting}
-                className="btn border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
-                title="이 일정을 삭제합니다"
-              >
-                {deleting ? '삭제 중…' : '삭제하기'}
-              </button>
-              <button onClick={() => setEditing(true)} className="btn-primary">수정하기</button>
-              <button onClick={onClose} className="btn">닫기</button>
-            </div>
           </>
         ) : (
           <>
-            {/* 편집 폼 */}
+            {/* === 수정 폼 (기존 내용 그대로 옮겨두세요) === */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <EditField label="작업내용">
                 <input className="input" value={edit.title} onChange={e => setEdit(s => ({ ...s, title: e.target.value }))} />
@@ -1099,7 +1110,6 @@ function DetailModal({
               </EditField>
             </div>
 
-            {/* 💰 금액 입력은 관리자만 */}
             {isAdmin && (
               <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
                 <EditField label="총매출">
@@ -1117,7 +1127,7 @@ function DetailModal({
               </div>
             )}
 
-            {/* ✅ 자재 선택(수정 모달) — 추가 모달과 동일 UI */}
+            {/* 자재 피커 */}
             <div className="mt-4">
               <MaterialsPicker
                 lines={linesEdit}
@@ -1129,45 +1139,59 @@ function DetailModal({
                 저장 시 현재 입력한 자재 사용내역으로 갈아끼우고(기존 내역 삭제), 자재비는 단가×수량으로 자동 반영됩니다.
               </p>
             </div>
-
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                onClick={onSave}
-                disabled={saving}
-                className="btn-primary disabled:opacity-50"
-              >
-                저장
-              </button>
-              <button
-                onClick={() => { // 취소 → 원복
-                  const names = effectiveNames(row);
-                  setEdit({
-                    title: row.title ?? '',
-                    empNames: names,
-                    customerName: row.customer_name ?? '',
-                    customerPhone: row.customer_phone ?? '',
-                    siteAddress: row.site_address ?? '',
-                    startLocal: start ? toLocal(start) : toLocal(new Date()),
-                    revenue: num(row.revenue),
-                    material_cost: num(row.material_cost),
-                    daily_wage: num(row.daily_wage),
-                    extra_cost: num(row.extra_cost),
-                    offDay: effectiveOff(row),
-                  });
-                  setLinesEdit([]); // 자재 라인 초기화 → 모달 다시 열면 DB에서 재로딩
-                  setEmpEditSearch('');
-                  setEditing(false);
-                }}
-                className="btn"
-              >
-                취소
-              </button>
-            </div>
           </>
         )}
       </div>
+
+      {/* 푸터: 고정 */}
+      <div className="sticky bottom-0 z-10 border-t border-slate-100 bg-white/90 backdrop-blur px-5 py-3">
+        {!editing ? (
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={onDelete}
+              disabled={deleting}
+              className="btn border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+              title="이 일정을 삭제합니다"
+            >
+              {deleting ? '삭제 중…' : '삭제하기'}
+            </button>
+            <button onClick={() => setEditing(true)} className="btn-primary">수정하기</button>
+            <button onClick={onClose} className="btn">닫기</button>
+          </div>
+        ) : (
+          <div className="flex justify-end gap-2">
+            <button onClick={onSave} disabled={saving} className="btn-primary disabled:opacity-50">저장</button>
+            <button
+              onClick={() => {
+                const names = effectiveNames(row);
+                setEdit({
+                  title: row.title ?? '',
+                  empNames: names,
+                  customerName: row.customer_name ?? '',
+                  customerPhone: row.customer_phone ?? '',
+                  siteAddress: row.site_address ?? '',
+                  startLocal: start ? toLocal(start) : toLocal(new Date()),
+                  revenue: num(row.revenue),
+                  material_cost: num(row.material_cost),
+                  daily_wage: num(row.daily_wage),
+                  extra_cost: num(row.extra_cost),
+                  offDay: effectiveOff(row),
+                });
+                setLinesEdit([]);
+                setEmpEditSearch('');
+                setEditing(false);
+              }}
+              className="btn"
+            >
+              취소
+            </button>
+          </div>
+        )}
+      </div>
     </div>
-  );
+  </div>
+);
+
 }
 
 /* ---------- 특정 날짜 전체 보기 모달 ---------- */
@@ -1183,19 +1207,25 @@ function DayDetailModal({
   isManager: boolean;
 }) {
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] p-5 shadow-2xl max-h=[80vh] md:max-h-[80vh] flex flex-col">
-        <div className="flex items-start justify-between mb-3">
-          <h2 className="text-lg font-bold text-sky-800">📅 {fmt(date, 'yyyy-MM-dd')} 일정({items.length}건)</h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-800">✕</button>
-        </div>
+  <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div
+      className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] shadow-2xl flex flex-col"
+      style={{ maxHeight: '85vh' }}
+    >
+      {/* 헤더: 고정 */}
+      <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex items-center justify-between">
+        <h2 className="text-lg font-bold text-sky-800">📅 {fmt(date, 'yyyy-MM-dd')} 일정({items.length}건)</h2>
+        <button onClick={onClose} className="text-slate-500 hover:text-slate-800">✕</button>
+      </div>
 
+      {/* 본문: 스크롤 */}
+      <div className="flex-1 overflow-y-auto px-5 py-3">
         <div className="flex justify-between mb-2">
           <div className="text-sm text-slate-600">해당 날짜의 모든 일정을 한눈에 확인하고 클릭해 상세로 들어갈 수 있어요.</div>
           <button className="btn" onClick={onAdd}>+ 이 날짜에 추가</button>
         </div>
 
-        <div className="overflow-auto rounded-xl border border-slate-200 divide-y">
+        <div className="overflow-hidden rounded-xl border border-slate-200 divide-y">
           {items.length === 0 && (
             <div className="p-4 text-sm text-slate-500">등록된 일정이 없습니다.</div>
           )}
@@ -1209,9 +1239,7 @@ function DayDetailModal({
               <button
                 key={r.id}
                 onClick={() => onView(r.id)}
-                className={`w-full text-left p-3 hover:bg-slate-50 relative ${
-                  isOff ? 'border border-rose-400 rounded-lg' : ''
-                }`}
+                className={`w-full text-left p-3 hover:bg-slate-50 relative ${isOff ? 'border border-rose-400 rounded-lg' : ''}`}
                 title="클릭하여 상세 보기"
               >
                 {isTeam && <span className="absolute left-0 top-0 h-full w-1 bg-sky-500 rounded-l-md" />}
@@ -1233,13 +1261,16 @@ function DayDetailModal({
             );
           })}
         </div>
+      </div>
 
-        <div className="mt-3 flex justify-end">
-          <button className="btn" onClick={onClose}>닫기</button>
-        </div>
+      {/* 푸터: 고정 */}
+      <div className="sticky bottom-0 z-10 border-t border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex justify-end">
+        <button className="btn" onClick={onClose}>닫기</button>
       </div>
     </div>
-  );
+  </div>
+);
+
 }
 
 /* ---------- 공통 소형 컴포넌트 ---------- */

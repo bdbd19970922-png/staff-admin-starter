@@ -137,35 +137,17 @@ export default function Page() {
           return fmtKRW(rev);
         })();
 
-        // 3) 미지급 급여(건수)
+        // 3) 미지급 급여(건수) — 읽기는 보안뷰 사용
         const unpaidCountPromise = (async () => {
           const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-          if (!isElevated) {
-            // employee_id 우선
-            let { count, error } = await supabase
-              .from('payrolls')
-              .select('*', { count: 'exact', head: true })
-              .eq('pay_month', ym)
-              .eq('paid', false)
-              .eq('employee_id', uid ?? '__none__');
-            if (!error && typeof count === 'number') return count;
-
-            // fallback: 이름(스키마에 따라 다를 수 있어 폴백만 적용)
-            const { count: c2 } = await supabase
-              .from('payrolls')
-              .select('*', { count: 'exact', head: true })
-              .eq('pay_month', ym)
-              .eq('paid', false)
-              .ilike('employee_name', `%${fullName}%`);
-            return typeof c2 === 'number' ? c2 : 0;
-          } else {
-            const { count } = await supabase
-              .from('payrolls')
-              .select('*', { count: 'exact', head: true })
-              .eq('pay_month', ym)
-              .eq('paid', false);
-            return typeof count === 'number' ? count : 0;
-          }
+          let q = supabase
+            .from('payrolls_secure')
+            .select('*', { count: 'exact', head: true })
+            .eq('pay_month', ym)
+            .eq('paid', false);
+          if (!isElevated && uid) q = q.eq('employee_id', uid);
+          const { count } = await q;
+          return typeof count === 'number' ? count : 0;
         })();
 
         // 4) 이번 달 지출(자재+경비) — 관리자만
@@ -244,12 +226,10 @@ export default function Page() {
             {hello}
           </p>
 
-          {/* 일반직원 모드 안내 + 개인화 응원 멘트 */}
+          {/* 일반직원 모드 안내 + 개인화 멘트 */}
           {!isElevated && (
             <p className="text-slate-500 text-sm mt-0.5">
               {fullName ? `${fullName} 님, 오늘도 안전 최우선! 항상 노고에 감사드립니다 🙏` : '오늘도 안전 최우선! 항상 노고에 감사드립니다 🙏'}
-              <br />
-              <span className="text-[12px]"></span>
             </p>
           )}
         </div>
