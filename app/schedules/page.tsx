@@ -6,6 +6,18 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import EmployeePicker, { EmployeeValue } from '@/components/EmployeePicker';
 
+/* ===== 세션 준비 대기(Unauthorized 예방) ===== */
+async function waitForAuthReady(maxTries = 6, delayMs = 300) {
+  for (let i = 0; i < maxTries; i++) {
+    const { data, error } = await supabase.auth.getSession();
+    const hasToken = !!data?.session?.access_token;
+    if (!error && hasToken) return data.session!;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  const { data } = await supabase.auth.getSession();
+  return data?.session ?? null;
+}
+
 /* ====== 타입/라벨 정의 ====== */
 type Row = {
   id: number;
@@ -35,10 +47,11 @@ export default function SchedulesPage() {
   const [isAuthed, setIsAuthed] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setIsAuthed(!!data.session?.user);
+    (async () => {
+      const session = await waitForAuthReady();
+      setIsAuthed(!!session?.user);
       setIsReady(true);
-    });
+    })();
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       setIsAuthed(!!session?.user);
     });
@@ -71,7 +84,15 @@ function LoggedOutScreen() {
    자식: 스케줄 CRUD + 목록 표시
    ===================================== */
 function SchedulesInner() {
+  // 권한/사용자
+  const [uid, setUid] = useState<string | null>(null);
+  const [fullName, setFullName] = useState<string>('');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isManager, setIsManager] = useState(false);
+  const isElevated = isAdmin || isManager; // 관리자 or 매니저
+
   const [emp, setEmp] = useState<EmployeeValue>({ mode: 'profile', employeeId: '' });
+
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
@@ -91,13 +112,46 @@ function SchedulesInner() {
     return new Date(local).toISOString();
   }
 
+  // 내 권한/이름 로드
+  useEffect(() => {
+    (async () => {
+      const session = await waitForAuthReady();
+      const _uid = session?.user?.id ?? null;
+      const email = (session?.user?.email ?? '').toLowerCase();
+      setUid(_uid);
+
+      // 환경변수 기반 관리자 호환
+      const parseList = (env?: string) => (env ?? '').split(',').map(s => s.trim()).filter(Boolean);
+      const adminIds = parseList(process.env.NEXT_PUBLIC_ADMIN_IDS);
+      const adminEmails = parseList(process.env.NEXT_PUBLIC_ADMIN_EMAILS).map(s => s.toLowerCase());
+
+      let elevatedAdmin = (!!_uid && adminIds.includes(_uid)) || (!!email && adminEmails.includes(email));
+      let elevatedManager = false;
+
+      let nameFromProfile = '';
+      if (_uid) {
+        const { data: me } = await supabase
+          .from('profiles')
+          .select('full_name,is_admin,is_manager')
+          .eq('id', _uid)
+          .maybeSingle();
+        nameFromProfile = (me?.full_name ?? '').trim();
+        if (me?.is_admin) elevatedAdmin = true;
+        if (me?.is_manager) elevatedManager = true;
+      }
+      setFullName(nameFromProfile || (session?.user?.email?.split('@')[0] ?? ''));
+
+      setIsAdmin(!!elevatedAdmin);
+      setIsManager(!!elevatedManager);
+    })();
+  }, []);
+
   async function loadRows() {
     setLoading(true);
     setMsg(null);
 
     try {
-      // 현재 로그인한 사용자
-      const { data: { user } } = await supabase.auth.getUser();
+      await waitForAuthReady();
 
       // 기본 쿼리
       let query = supabase
@@ -106,18 +160,15 @@ function SchedulesInner() {
         .order('start_ts', { ascending: false })
         .limit(100);
 
-      if (user) {
-        // 관리자 여부 체크
-        const { data: prof } = await supabase
-          .from('profiles')
-          .select('is_admin')
-          .eq('id', user.id)
-          .maybeSingle();
-
-        const isAdmin = Boolean(prof?.is_admin);
-        if (!isAdmin) {
-          // 일반 직원이면 본인 employee_id만 조회
-          query = query.eq('employee_id', user.id);
+      // ❗권한 적용: 직원은 본인 것만
+      if (!isElevated) {
+        if (uid) {
+          query = query.eq('employee_id', uid);
+        } else if (fullName) {
+          query = query.ilike('employee_name', `%${fullName}%`);
+        } else {
+          // 둘 다 없으면 아무 것도 안 보이게 (안전장치)
+          query = query.eq('id', -1);
         }
       }
 
@@ -134,13 +185,17 @@ function SchedulesInner() {
   }
 
   useEffect(() => {
+    // 권한/uid가 준비된 다음 호출되도록 의존성 포함
     loadRows();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isElevated, uid, fullName]);
 
   async function onCreate() {
     setMsg(null);
 
     try {
+      await waitForAuthReady();
+
       const payload: any = {
         title: f.title.trim(),
         location: f.location.trim(),
@@ -153,28 +208,47 @@ function SchedulesInner() {
         employee_phone: null,
       };
 
-      if (emp.mode === 'profile') {
-        if (!emp.employeeId) {
-          setMsg('직원을 선택해주세요.');
+      // ❗권한 방어: 직원은 무조건 본인에게만 배정
+      if (!isElevated) {
+        if (!uid) {
+          setMsg('세션을 다시 확인해주세요.');
           return;
         }
-        const { data: prof, error: pErr } = await supabase
+        // profiles에서 이름/전화 가져와 채워줌
+        const { data: p } = await supabase
           .from('profiles')
-          .select('name, phone')
-          .eq('id', emp.employeeId)
+          .select('full_name,phone')
+          .eq('id', uid)
           .maybeSingle();
-        if (pErr) throw pErr;
 
-        payload.employee_id = emp.employeeId;
-        payload.employee_name = prof?.name ?? null;
-        payload.employee_phone = prof?.phone ?? null;
+        payload.employee_id = uid;
+        payload.employee_name = (p?.full_name ?? fullName ?? '').trim() || null;
+        payload.employee_phone = (p?.phone ?? '').trim() || null;
       } else {
-        if (!emp.name) {
-          setMsg('직접입력: 이름을 입력해주세요.');
-          return;
+        // 관리자/매니저는 기존 EmployeePicker 동작 유지
+        if (emp.mode === 'profile') {
+          if (!emp.employeeId) {
+            setMsg('직원을 선택해주세요.');
+            return;
+          }
+          const { data: prof, error: pErr } = await supabase
+            .from('profiles')
+            .select('full_name, phone')
+            .eq('id', emp.employeeId)
+            .maybeSingle();
+          if (pErr) throw pErr;
+
+          payload.employee_id = emp.employeeId;
+          payload.employee_name = prof?.full_name ?? null;
+          payload.employee_phone = prof?.phone ?? null;
+        } else {
+          if (!emp.name) {
+            setMsg('직접입력: 이름을 입력해주세요.');
+            return;
+          }
+          payload.employee_name = emp.name.trim();
+          payload.employee_phone = emp.phone?.trim() || null;
         }
-        payload.employee_name = emp.name.trim();
-        payload.employee_phone = emp.phone?.trim() || null;
       }
 
       const { error } = await supabase.from('schedules').insert(payload);
@@ -189,7 +263,16 @@ function SchedulesInner() {
     }
   }
 
-  async function onDelete(id: number) {
+  async function onDelete(id: number, row: Row) {
+    // ❗권한 방어: 직원은 본인 일정만 삭제 가능
+    if (!isElevated) {
+      const ownerId = (row.employee_id ?? '').trim();
+      const ok = ownerId && uid && ownerId === uid;
+      if (!ok) {
+        setMsg('본인 일정만 삭제할 수 있습니다.');
+        return;
+      }
+    }
     if (!confirm('정말 삭제할까요?')) return;
     const { error } = await supabase.from('schedules').delete().eq('id', id);
     if (error) {
@@ -250,10 +333,12 @@ function SchedulesInner() {
               />
             </div>
 
-            {/* 직원 선택/직접입력 */}
-            <div className="md:col-span-2">
-              <EmployeePicker label="담당 직원" value={emp} onChange={setEmp} />
-            </div>
+            {/* 직원 선택/직접입력: 승격 계정만 노출(직원은 본인 고정) */}
+            {isElevated && (
+              <div className="md:col-span-2">
+                <EmployeePicker label="담당 직원" value={emp} onChange={setEmp} />
+              </div>
+            )}
 
             <div>
               <label className="mb-1 block text-sm text-slate-600">시작</label>
@@ -372,8 +457,9 @@ function SchedulesInner() {
                     </td>
                     <td className="p-2">
                       <div className="flex gap-2">
+                        {/* 직원은 본인 일정만 수정/삭제 가능. 링크는 유지, 서버 RLS가 최종 방어 */}
                         <Link className="btn" href={`/schedules/${r.id}/edit`}>수정</Link>
-                        <button className="btn" onClick={() => onDelete(r.id)}>삭제</button>
+                        <button className="btn" onClick={() => onDelete(r.id, r)}>삭제</button>
                       </div>
                     </td>
                   </tr>
@@ -381,7 +467,7 @@ function SchedulesInner() {
                 {rows.length === 0 && (
                   <tr>
                     <td className="p-2 text-sm text-slate-500" colSpan={8}>
-                      데이터가 없습니다. “+ 새 일정”으로 하나 추가해보세요.
+                      데이터가 없습니다. {isElevated ? '“+ 새 일정”으로 하나 추가해보세요.' : '관리자/매니저에게 일정을 배정받거나 “+ 새 일정”으로 본인 일정을 추가해보세요.'}
                     </td>
                   </tr>
                 )}

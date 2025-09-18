@@ -2,11 +2,22 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import AuthBar from '../../components/AuthBar';
 import { supabase } from '../../lib/supabaseClient';
 import {
-  format, parseISO, startOfMonth, endOfMonth, isAfter, isBefore, addDays,
+  format, startOfMonth, endOfMonth, isAfter, isBefore, addDays,
 } from 'date-fns';
+
+// ===== 세션 준비 대기(Unauthorized 예방) =====
+async function waitForAuthReady(maxTries = 6, delayMs = 300) {
+  for (let i = 0; i < maxTries; i++) {
+    const { data, error } = await supabase.auth.getSession();
+    const hasToken = !!data?.session?.access_token;
+    if (!error && hasToken) return data.session!;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  const { data } = await supabase.auth.getSession();
+  return data?.session ?? null;
+}
 
 type Row = {
   id: number;
@@ -15,7 +26,7 @@ type Row = {
   employee_id?: string | null;
   employee_name?: string | null;
   revenue?: number | null;
-  material_cost_visible?: number | null;     // ← 항상 이 컬럼만 사용
+  material_cost_visible?: number | null;     // ← 항상 이 컬럼만 사용(마스킹 반영됨)
   daily_wage?: number | null;
   extra_cost?: number | null;
   net_profit_visible?: number | null;        // ← 관리자만 값, 비관리자 null
@@ -26,7 +37,7 @@ type GroupedRow = {
   label: string;
   count: number;
   revenue: number;
-  material_cost_visible: number;             // ← 이름을 visible 기준으로 맞춤
+  material_cost_visible: number;             // ← visible 기준 합산
   daily_wage: number;
   extra_cost: number;
   employee_id?: string | null;
@@ -46,9 +57,8 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
 
   const [isAdmin, setIsAdmin] = useState(false);
-  const [isManager, setIsManager] = useState(false);         // ← 추가
-  const isElevated = isAdmin || isManager;                   // ← 관리자 or 매니저
-  const [hasFinanceCols, setHasFinanceCols] = useState<boolean | null>(null);
+  const [isManager, setIsManager] = useState(false);
+  const isElevated = isAdmin || isManager; // 관리자 or 매니저
 
   // 현재 로그인 사용자 정보(직원 모드에서 본인 필터에 사용)
   const [userId, setUserId] = useState<string | null>(null);
@@ -63,18 +73,20 @@ export default function ReportsPage() {
   const [dateFrom, setDateFrom] = useState<string>(() => toDateInputValue(startOfMonth(new Date())));
   const [dateTo, setDateTo] = useState<string>(() => toDateInputValue(endOfMonth(new Date())));
 
-  // 직원별 보기에서 사용할 "직원 선택" (소문자 key, 'all' 포함)
+  // 직원별 보기에서 사용할 "직원 선택"
   const [empNameFilter, setEmpNameFilter] = useState<string>('all');
 
-  // 관리자/매니저 판별 + 사용자 프로필 이름 로드
+  // ===== 권한/사용자명 로드 =====
   useEffect(() => {
     (async () => {
+      await waitForAuthReady();
+
       const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
         .split(',').map(s => s.trim()).filter(Boolean);
       const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
         .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-      const { data: { session} } = await supabase.auth.getSession();
+      const { data: { session } } = await supabase.auth.getSession();
       const uid = session?.user?.id ?? '';
       const email = (session?.user?.email ?? '').toLowerCase();
       setUserId(uid || null);
@@ -85,12 +97,13 @@ export default function ReportsPage() {
       if (uid) {
         const prof = await supabase
           .from('profiles')
-          .select('display_name, full_name, name, is_manager')
+          .select('display_name, full_name, name, is_manager, is_admin')
           .eq('id', uid)
           .maybeSingle();
         if (!prof.error) {
           name = (prof.data?.display_name || prof.data?.full_name || prof.data?.name || '').trim() || null;
-          if (prof.data?.is_manager) setIsManager(true); // ← 매니저 플래그
+          if (prof.data?.is_manager) setIsManager(true);
+          if (prof.data?.is_admin) setIsAdmin(true); // DB is_admin도 인정
         }
       }
       // 메타데이터 fallback
@@ -105,15 +118,17 @@ export default function ReportsPage() {
     })();
   }, []);
 
-  // 데이터 로드 (보안 뷰)
+  // ===== 데이터 로드 (보안 뷰) =====
   useEffect(() => {
     (async () => {
       setLoading(true);
       setMsg(null);
+      await waitForAuthReady();
 
       const sel =
         'id,employee_id,employee_name,work_date,revenue,daily_wage,extra_cost,material_cost_visible,net_profit_visible';
 
+      // 기본: 리포트 보안뷰 사용
       let { data, error } = await supabase
         .from('reports_secure')
         .select(sel)
@@ -121,17 +136,15 @@ export default function ReportsPage() {
         .returns<Row[]>();
 
       if (error) {
-        setHasFinanceCols(false);
-        // 폴백 최소 컬럼 (schedules_secure를 쓰되, 여기선 표/그래프 최소 표시만)
-        const sel2 = 'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
+        // 폴백: 최소 컬럼만 schedules_secure에서 읽기
+        const sel2 =
+          'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
         const fb = await supabase
           .from('schedules_secure')
           .select(sel2)
           .order('start_ts', { ascending: true })
           .returns<Row[]>();
         data = fb.data; error = fb.error;
-      } else {
-        setHasFinanceCols(true);
       }
 
       if (error) { setMsg(`불러오기 오류: ${error.message}`); setRows([]); }
@@ -141,7 +154,7 @@ export default function ReportsPage() {
   }, []);
 
   // ✅ 권한 기반 1차 필터
-  //   - 관리자/매니저: 전사 데이터 열람
+  //   - 관리자/매니저: 전사 데이터
   //   - 직원: 본인 것만
   const rowsForUser = useMemo(() => {
     if (isElevated) return rows;
@@ -191,7 +204,7 @@ export default function ReportsPage() {
     return groupByDay(filteredByDate);
   }, [filteredForBranding, filteredByDate, mode]);
 
-  // (중요) 비관리자는 net 선택 시 강제로 revenue로 대체
+  // (중요) 비관리자는 net 선택 시 강제로 revenue로 대체(매니저도 마스킹)
   const metricSafe: Metric = useMemo(
     () => (!isAdmin && metric === 'net') ? 'revenue' : metric,
     [isAdmin, metric]
@@ -215,14 +228,13 @@ export default function ReportsPage() {
       const key = format(d, 'yyyy-MM-dd');
       let sum = 0;
       for (const r of baseRows) {
-        const rd = parseDateInput((r.work_date ?? '').toString());
-        if (!rd) continue;
-        const k = format(rd, 'yyyy-MM-dd');
+        const d2 = parseDateInput((r.work_date ?? '').toString());
+        if (!d2) continue;
+        const k = format(d2, 'yyyy-MM-dd');
         if (k !== key) continue;
 
         if (metricSafe === 'net') {
-          // 관리자만 net 집계 (DB에서 계산된 net_profit_visible 사용)
-          if (!isAdmin) continue;
+          if (!isAdmin) continue; // 매니저/직원은 순수익 집계 제외
           sum += num(r.net_profit_visible);
         } else if (metricSafe === 'revenue') {
           sum += num(r.revenue);
@@ -240,23 +252,166 @@ export default function ReportsPage() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const canSyncPayroll = isAdmin && mode === 'employee';
 
+ // ======== 안전 UPSERT ========
+  /**
+   * 안전 반영
+   * - key = (employee_id, YYYY-MM)
+   * - 이미 paid=true면 건너뜀
+   * - 그 외는 upsert(onConflict: employee_id,pay_month)로 신규/갱신
+   * - employee_id가 없으면(이름만) 기존 방식(SELECT→UPDATE/INSERT) 유지
+   */
+  async function safeUpsertPayroll(record: {
+    employee_id: string | null;
+    employee_name: string | null;
+    pay_month: string;        // 화면표시용(YYYY-MM 또는 범위)
+    period_start: string;
+    period_end: string;
+    amount: number | null;
+    total_pay: number | null;
+    memo: string | null;
+  }) {
+    // 1) 키 월(YYYY-MM) 확정 (TEXT 컬럼이므로 'YYYY-MM'로 고정)
+    const keyMonth =
+      toYYYYMM(record.pay_month) ||
+      toYYYYMM(record.period_start) ||
+      toYYYYMM(record.period_end);
+    if (!keyMonth) throw new Error('pay_month 계산 실패');
+
+    // 2) employee_id가 있으면: paid 여부만 조회 → paid면 스킵, 아니면 upsert
+    if (record.employee_id) {
+      // 2-1) 기존 paid 여부 조회
+      const { data: ex, error: exErr } = await supabase
+        .from('payrolls')
+        .select('id, paid')
+        .eq('employee_id', record.employee_id)
+        .eq('pay_month', keyMonth)
+        .maybeSingle();
+      if (exErr && exErr.code !== 'PGRST116') throw exErr;
+
+      if (ex?.paid === true) {
+        // 지급완료는 보호
+        return { action: 'skip_paid' as const };
+      }
+
+      // 2-2) 미지급 또는 없음 → upsert (유니크: employee_id,pay_month)
+      const payload = {
+        employee_id: record.employee_id,
+        employee_name: record.employee_name,
+        pay_month: keyMonth,          // TEXT 'YYYY-MM'
+        period_start: record.period_start,
+        period_end: record.period_end,
+        amount: record.amount ?? null,
+        total_pay: record.total_pay ?? record.amount ?? null,
+        paid: ex?.paid ?? false,      // 기존이 있으면 그대로 유지(보통 false)
+        paid_at: ex?.paid ? (new Date()).toISOString().slice(0,10) : null, // paid면 유지, 아니면 null
+        memo: record.memo ?? null,
+      };
+
+      const { data, error } = await supabase
+        .from('payrolls')
+        .upsert([payload], {
+          onConflict: 'employee_id,pay_month',
+          ignoreDuplicates: false,
+          defaultToNull: false,
+        })
+        .select('id');
+
+      if (error) throw error;
+
+      // 갱신/신규 구분은 응답으로는 애매하므로 기존 유무로 판단
+      return { action: ex ? ('update' as const) : ('insert' as const) };
+    }
+
+    // 3) employee_id가 없는 경우(이름만 있는 케이스):
+    //    유니크 제약을 쓸 수 없으니, 기존 SELECT → (paid면 스킵, 아니면 UPDATE) → 없으면 INSERT
+    let existing: { id: string; paid: boolean } | null = null;
+    let q = supabase
+      .from('payrolls')
+      .select('id, paid')
+      .is('employee_id', null)
+      .eq('pay_month', keyMonth)
+      .limit(1);
+    if (record.employee_name) q = q.ilike('employee_name', record.employee_name);
+    const { data: ex2, error: exErr2 } = await q.maybeSingle();
+    if (exErr2 && exErr2.code !== 'PGRST116') throw exErr2;
+    existing = (ex2 as any) ?? null;
+
+    if (existing) {
+      if (existing.paid === true) {
+        return { action: 'skip_paid' as const };
+      }
+      const { error: upErr } = await supabase
+        .from('payrolls')
+        .update({
+          amount: record.amount ?? null,
+          total_pay: record.total_pay ?? record.amount ?? null,
+          memo: record.memo ?? null,
+          period_start: record.period_start,
+          period_end: record.period_end,
+        })
+        .eq('id', existing.id);
+      if (upErr) throw upErr;
+      return { action: 'update' as const };
+    } else {
+      const payload2 = {
+        employee_id: null as string | null,
+        employee_name: record.employee_name,
+        pay_month: keyMonth,
+        period_start: record.period_start,
+        period_end: record.period_end,
+        amount: record.amount ?? null,
+        total_pay: record.total_pay ?? record.amount ?? null,
+        paid: false,
+        paid_at: null,
+        memo: record.memo ?? null,
+      };
+      const { error: insErr } = await supabase.from('payrolls').insert(payload2);
+      if (insErr) throw insErr;
+      return { action: 'insert' as const };
+    }
+
+
+    // 3-3) 없으면 INSERT
+    const payload = {
+      employee_id: record.employee_id,
+      employee_name: record.employee_name,
+      pay_month: keyMonth,        // TEXT 컬럼 → 'YYYY-MM'로 저장
+      period_start: record.period_start,
+      period_end: record.period_end,
+      amount: record.amount ?? null,
+      total_pay: record.total_pay ?? record.amount ?? null,
+      paid: false,
+      paid_at: null,
+      memo: record.memo ?? null,
+    };
+    const { error: insErr } = await supabase.from('payrolls').insert(payload);
+    if (insErr) throw insErr;
+    return { action: 'insert' as const };
+  }
+
+  /**
+   * 버튼 클릭 핸들러
+   * - 직원별로 합산 → 이름→ID 매칭 → 중복 키(직원/월)로 dedup → safeUpsert 반복
+   * - 완료 메시지: 신규/갱신/건너뜀(지급완료)
+   */
   const syncPayrolls = async () => {
     if (!canSyncPayroll) return;
     setSyncMsg(null);
 
+    // 1) 기간 유효성
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
-    if (!s || !e) {
+    if (s == null || e == null) {
       setSyncMsg('⚠️ 기간을 올바르게 선택해주세요.');
       return;
     }
     const sameMonth = s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth();
-    const payMonth = sameMonth ? format(s, 'yyyy-MM') : `${dateFrom}~${dateTo}`;
+    const payMonthDisplay = sameMonth ? format(s, 'yyyy-MM') : `${dateFrom}~${dateTo}`;
 
-    // 직원별 집계 (현재 모드의 직원 필터도 반영)
+    // 2) 직원별 집계
     const byEmp = groupByEmployee(filteredByDate);
 
-    // 이름→ID 해석 시도(스케줄 전체에서 단일 ID면 채택)
+    // 3) 이름→ID 해석(스케줄에서 단일 ID면 채택)
     const needResolve = byEmp.rows.filter(r => !r.employee_id).map(r => r.label);
     const resolvedMap = new Map<string, string>();
     await Promise.all(
@@ -266,7 +421,7 @@ export default function ReportsPage() {
       })
     );
 
-    // 레코드 초안
+    // 4) 레코드 초안
     const raw = byEmp.rows.map(r => {
       const id = r.employee_id ?? resolvedMap.get(r.label) ?? null;
       const name = (r.employee_name ?? r.label ?? '').trim();
@@ -274,7 +429,7 @@ export default function ReportsPage() {
       return {
         employee_id: id,
         employee_name: name || null,
-        pay_month: payMonth,
+        pay_month: payMonthDisplay,
         period_start: dateFrom,
         period_end: dateTo,
         amount: total,
@@ -285,58 +440,40 @@ export default function ReportsPage() {
       };
     });
 
-    // 키(ID|월 또는 name|월)로 합산/중복 제거
+    // 5) 키(ID|월 or name|월)로 합산/중복제거
     const dedup = new Map<string, typeof raw[number]>();
     for (const r of raw) {
-      const key = r.employee_id
-        ? `id:${r.employee_id}|${r.pay_month}`
-        : `name:${(r.employee_name ?? '').toLowerCase()}|${r.pay_month}`;
+      const key =
+        (r.employee_id ? `id:${r.employee_id}` : `name:${(r.employee_name ?? '').toLowerCase()}`) +
+        `|${toYYYYMM(r.pay_month) || toYYYYMM(r.period_start)}`;
       const prev = dedup.get(key);
       if (!prev) dedup.set(key, { ...r });
       else {
-        const sumv = (prev.total_pay ?? 0) + (r.total_pay ?? 0);
+        const sumv = (Number(prev.total_pay ?? 0) || 0) + (Number(r.total_pay ?? 0) || 0);
         dedup.set(key, { ...prev, amount: sumv, total_pay: sumv });
       }
     }
     const records = Array.from(dedup.values());
 
+    // 6) 안전 반영 루프
     try {
+      let inserted = 0, updated = 0, skippedPaid = 0;
       for (const r of records) {
-        if (r.employee_id) {
-          const del = await supabase
-            .from('payrolls')
-            .delete()
-            .eq('pay_month', r.pay_month)
-            .eq('employee_id', r.employee_id);
-          if (del.error) throw del.error;
-        } else {
-          let del = supabase
-            .from('payrolls')
-            .delete()
-            .eq('pay_month', r.pay_month)
-            .is('employee_id', null);
-          if (r.employee_name) del = del.ilike('employee_name', r.employee_name);
-          else del = del.is('employee_name', null);
-          const delRes = await del;
-          if (delRes.error) throw delRes.error;
-        }
+        const res = await safeUpsertPayroll(r);
+        if (res.action === 'insert') inserted++;
+        else if (res.action === 'update') updated++;
+        else skippedPaid++;
       }
-
-      const ins = await supabase.from('payrolls').insert(records);
-      if (ins.error) throw ins.error;
-
-      const namesNoId = records.filter(r => !r.employee_id).map(r => r.employee_name).filter(Boolean) as string[];
-      setSyncMsg(
-        namesNoId.length
-          ? `✅ 반영 완료(이름 기반 포함): ${Array.from(new Set(namesNoId)).join(', ')}`
-          : '✅ 급여 테이블에 직원별 인건비가 반영되었습니다.'
-      );
+      const skippedNote = skippedPaid ? ` / 지급완료라 건너뜀 ${skippedPaid}건` : '';
+      setSyncMsg(`✅ 급여 반영 완료: 신규 ${inserted}건 / 갱신 ${updated}건${skippedNote}`);
     } catch (err: any) {
       setSyncMsg(`⚠️ 급여 반영 실패: ${err?.message ?? '알 수 없는 오류'}`);
     }
   };
+// ======== 안전 UPSERT 끝 ========
 
-  // 🔹 컴포넌트 반환부
+
+
   return (
     <div>
       <div className="p-4 space-y-4">
@@ -477,8 +614,7 @@ export default function ReportsPage() {
             <TableReport
               mode={mode}
               data={grouped}
-              isAdmin={isAdmin}
-              hasFinanceCols={hasFinanceCols}
+              isAdmin={isAdmin}   // ← 관리자만 민감값 표시
             />
           )}
         </div>
@@ -494,7 +630,6 @@ function TableReport({
   mode: Mode;
   data: Grouped;
   isAdmin: boolean;
-  hasFinanceCols: boolean | null;
 }) {
   const baseHeaders = mode === 'employee'
     ? ['직원', '건수', '매출', '자재비', '인건비', '기타비용']
@@ -513,14 +648,14 @@ function TableReport({
         </thead>
         <tbody>
           {data.rows.map(r => {
-            const net = computeNetGrouped(r); // ← 그룹 기준 순수익 계산
+            const net = computeNetGrouped(r);
             return (
               <tr key={r.key} className="hover:bg-sky-50/50">
                 <td className="border border-sky-100 px-2 py-1 text-sm">{r.label}</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm">{r.count}</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.revenue)}</td>
 
-                {/* 자재비: 비관리자 마스킹 */}
+                {/* 자재비: 관리자만 숫자, 그 외 *** */}
                 <td className="border border-sky-100 px-2 py-1 text-sm">
                   {isAdmin ? fmtMoney(r.material_cost_visible) : '***'}
                 </td>
@@ -528,7 +663,7 @@ function TableReport({
                 <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.daily_wage)}</td>
                 <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.extra_cost)}</td>
 
-                {/* 순수익: 비관리자 마스킹 */}
+                {/* 순수익: 관리자만 숫자, 그 외 *** */}
                 <td className="border border-sky-100 px-2 py-1 text-sm">
                   {isAdmin ? fmtMoney(net) : '***'}
                 </td>
@@ -647,18 +782,9 @@ function groupByDay(rows: Row[]): Grouped {
 function groupByMonth(rows: Row[]): Grouped {
   return group(rows, (d) => format(d, 'yyyy-MM'));
 }
-function groupByWeek(rows: Row[]): Grouped {
-  return group(rows, (d) => {
-    const monday = startOfWeekMono(d);
-    const w = weekIndex(monday);
-    return `${format(monday, 'yyyy')}-W${w.toString().padStart(2, '0')}`;
-  });
-}
-
-/** 직원별 그룹핑 */
 function groupByEmployee(rows: Row[]): Grouped {
   type Acc = GroupedRow & { _ids: Set<string> };
-  const map = new Map<string, Acc>(); // key: 직원명(정규화)
+  const map = new Map<string, Acc>();
 
   for (const r of rows) {
     const name = ((r.employee_name ?? '').trim()) || '(미지정)';
@@ -681,7 +807,7 @@ function groupByEmployee(rows: Row[]): Grouped {
     const g = map.get(norm)!;
     g.count += 1;
     g.revenue                 += num(r.revenue);
-    g.material_cost_visible   += num(r.material_cost_visible); // ← visible만 합산
+    g.material_cost_visible   += num(r.material_cost_visible);
     g.daily_wage              += num(r.daily_wage);
     g.extra_cost              += num(r.extra_cost);
 
@@ -714,7 +840,7 @@ function groupByEmployee(rows: Row[]): Grouped {
 function group(rows: Row[], keyOf: (d: Date) => string): Grouped {
   const map = new Map<string, GroupedRow>();
   for (const r of rows) {
-    const d = parseDateInput((r.work_date ?? '').toString()); // ← work_date 사용
+    const d = parseDateInput((r.work_date ?? '').toString());
     if (!d) continue;
     const key = keyOf(d);
     if (!map.has(key)) map.set(key, emptyGroup(key, key));
@@ -744,9 +870,8 @@ function sumGroups(acc: GroupedRow, r: GroupedRow): GroupedRow {
   };
 }
 
-// 그룹 단위 순수익: 관리자일 때만 쓰임(표시도 관리자만)
+// 그룹 단위 순수익: 관리자일 때만 표시되도록 위에서 마스킹
 function computeNetGrouped(x: {revenue:number; material_cost_visible:number; daily_wage:number; extra_cost:number}) {
-  // DB의 net_profit_visible은 행 단위라 그룹엔 없음 → 관리자인 경우에 한해 가감식으로 계산
   return num(x.revenue) - num(x.material_cost_visible) - num(x.daily_wage) - num(x.extra_cost);
 }
 
@@ -770,30 +895,17 @@ function toDateInputValue(d: Date) {
   const dd = String(d.getDate()).padStart(2,'0');
   return `${yyyy}-${mm}-${dd}`;
 }
-
-// 월~일 주차 계산용
-function startOfWeekMono(d: Date) {
-  const day = d.getDay(); // 0=Sun
-  const mondayDelta = (day === 0 ? -6 : 1 - day);
-  const monday = new Date(d);
-  monday.setDate(d.getDate() + mondayDelta);
-  monday.setHours(0,0,0,0);
-  return monday;
-}
-function weekIndex(monday: Date) {
-  const firstMonday = startOfWeekMono(new Date(monday.getFullYear(), 0, 1));
-  let idx = 1;
-  let cur = new Date(firstMonday);
-  while (isBefore(cur, monday)) {
-    cur = addDays(cur, 7);
-    idx++;
-  }
-  return idx;
+function toYYYYMM(s?: string | null) {
+  if (!s) return '';
+  return s.slice(0, 7);
 }
 
-/** schedules 전체에서 같은 이름의 employee_id가 "정확히 1개"면 그 ID 반환
- *  (주의: schedules에 대한 RLS가 읽기를 허용해야 동작합니다)
- */
+// 이름 정규화
+function normalizeName(n?: string | null) {
+  return ((n ?? '').trim().toLowerCase()) || '';
+}
+
+/** schedules 전체에서 같은 이름의 employee_id가 "정확히 1개"면 그 ID 반환 */
 async function resolveEmployeeIdByName(name: string): Promise<string | null> {
   const trimmed = (name ?? '').trim();
   if (!trimmed) return null;
@@ -812,9 +924,4 @@ async function resolveEmployeeIdByName(name: string): Promise<string | null> {
       .filter(Boolean) as string[])
   );
   return ids.length === 1 ? ids[0] : null;
-}
-
-// 이름 정규화
-function normalizeName(n?: string | null) {
-  return ((n ?? '').trim().toLowerCase()) || '';
 }

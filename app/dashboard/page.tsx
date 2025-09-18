@@ -8,6 +8,19 @@ import { startOfMonth, endOfMonth, formatISO } from 'date-fns';
 
 type Stat = { label: string; value: string | number; href?: string; note?: string };
 
+/** 세션이 실제로 준비될 때까지 잠깐 대기 (401/Unauthorized 예방) */
+async function waitForAuthReady(maxTries = 6, delayMs = 300) {
+  for (let i = 0; i < maxTries; i++) {
+    const { data, error } = await supabase.auth.getSession();
+    const hasToken = !!data?.session?.access_token;
+    if (!error && hasToken) return data.session!;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  // 마지막에도 없으면 그대로 진행(익명 요청은 어차피 RLS에서 걸림)
+  const { data } = await supabase.auth.getSession();
+  return data?.session ?? null;
+}
+
 export default function Page() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<Stat[]>([
@@ -28,7 +41,8 @@ export default function Page() {
   // 1) 내 정보/권한 확정 + 인사말 (항상 full_name)
   useEffect(() => {
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      // ✅ 세션 토큰 준비될 때까지 잠깐 대기 (Unauthorized 방지)
+      const session = await waitForAuthReady();
       const _uid = session?.user?.id ?? null;
       const email = (session?.user?.email ?? '').toLowerCase();
       setUid(_uid);
@@ -75,6 +89,9 @@ export default function Page() {
     (async () => {
       setLoading(true);
       try {
+        // ✅ 세션 토큰 준비될 때까지 잠깐 대기 (Unauthorized 방지)
+        await waitForAuthReady();
+
         const now = new Date();
         const todayStr   = formatISO(now, { representation: 'date' }); // YYYY-MM-DD
         const monthStart = formatISO(startOfMonth(now));
@@ -151,9 +168,9 @@ export default function Page() {
           }
         })();
 
-        // 4) 이번 달 지출(자재+경비) — 관리자/매니저만
+        // 4) 이번 달 지출(자재+경비) — 관리자만
         const monthSpendingPromise = (async () => {
-          if (!isElevated) return null;
+          if (!isAdmin) return null; // 매니저는 민감값 마스킹 정책에 맞춰 숨김
           let sum = 0;
 
           // 스케줄에서 자재/경비
@@ -194,15 +211,16 @@ export default function Page() {
           { label: '이번 달 총 매출', value: rev, href: '/reports', note: '리포트 기준' },
           { label: '미지급 급여(건수)', value: unpaid, href: '/payrolls' },
         ];
-        if (isElevated) {
+        if (isAdmin) {
           next.push({ label: '이번 달 지출(자재+경비)', value: spend ?? '-', href: '/reports', note: '리포트 기준' });
         }
+
         setStats(next);
       } finally {
         setLoading(false);
       }
     })();
-  }, [isElevated, fullName, uid]);
+  }, [isElevated, isAdmin, fullName, uid]);
 
   return (
     <div

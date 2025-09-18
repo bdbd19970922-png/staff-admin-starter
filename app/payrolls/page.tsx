@@ -34,21 +34,48 @@ export default function Page() {
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // 관리자인지 판별
+  // 현재 로그인 사용자 id/email (재사용)
+  const [userId, setUserId] = useState<string>('');
+  const [userEmail, setUserEmail] = useState<string>('');
+
+  // 관리자/매니저 판별
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isManager, setIsManager] = useState(false);
+
+  // 관리자: 환경변수 + 프로필(is_admin) 둘 다 인정
   useEffect(() => {
     (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const uid = session?.user?.id ?? '';
+      const email = (session?.user?.email ?? '').toLowerCase();
+      setUserId(uid);
+      setUserEmail(email);
+
+      // 1) env 기반 관리자
       const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
         .split(',').map(s => s.trim()).filter(Boolean);
       const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
         .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      let envAdmin = (!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email));
 
-      const { data: { session } } = await supabase.auth.getSession();
-      const uid = session?.user?.id ?? '';
-      const email = (session?.user?.email ?? '').toLowerCase();
-      setIsAdmin((!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email)));
+      // 2) 프로필에서 관리자/매니저 플래그 조회
+      if (uid) {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('is_admin,is_manager')
+          .eq('id', uid)
+          .maybeSingle();
+        setIsManager(!!prof?.is_manager);
+        // envAdmin OR DB is_admin
+        setIsAdmin(envAdmin || !!prof?.is_admin);
+      } else {
+        setIsManager(false);
+        setIsAdmin(envAdmin);
+      }
     })();
   }, []);
+
+  const canViewAll = isAdmin || isManager; // 관리자 or 매니저면 전사 열람
 
   /* ===== 필터: 월 / 직원 ===== */
   const [month, setMonth] = useState<string>(() => {
@@ -68,14 +95,23 @@ export default function Page() {
       setLoading(true);
       setMsg(null);
 
-      // 선택 월에 해당하는 레코드만 서버에서 1차 필터
-      const orCond = `pay_month.eq.${month},pay_month.ilike.*${month}*`;
-      const { data, error } = await supabase
-        .from('payrolls')
+      // 선택 월이 있으면 or 조건, 없으면 전체
+      const orCond = month ? `pay_month.eq.${month},pay_month.ilike.*${month}*` : undefined;
+
+      let q = supabase
+        .from('payrolls_secure') // ✅ 읽기는 보안뷰
         .select('id,employee_id,employee_name,pay_month,period_start,period_end,amount,total_pay,paid,paid_at,memo')
-        .or(orCond)
         .order('employee_name', { ascending: true })
         .order('pay_month', { ascending: false });
+
+      if (orCond) q = q.or(orCond);
+
+      // ✅ 직원만 자기 것 필터 (관리자/매니저는 전사)
+      if (!canViewAll && userId) {
+        q = q.eq('employee_id', userId);
+      }
+
+      const { data, error } = await q;
 
       if (error) {
         setMsg(`불러오기 오류: ${error.message}`);
@@ -85,7 +121,8 @@ export default function Page() {
       }
       setLoading(false);
     })();
-  }, [month]);
+    // canViewAll/userId가 결정되면 재조회
+  }, [month, canViewAll, userId]);
 
   /* ===== 프로필 목록 (실시간) ===== */
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);

@@ -10,6 +10,9 @@ import {
   parseISO,
 } from 'date-fns';
 
+/* ✅ 자재 선택 UI 임포트 */
+import MaterialsPicker, { MatLine, MaterialPub, Location } from '@/components/MaterialsPicker';
+
 /* ================== 타입 ================== */
 type Row = {
   id: number;
@@ -42,10 +45,10 @@ type Row = {
 type DayCellItem = {
   id: number;
   title: string;
-  emp?: string;     // 렌더링용 직원 문자열 (A, B)
-  netText?: string; // 관리자용
-  isOff?: boolean;  // 휴무
-  isTeam?: boolean; // 공동작업(여러 명)
+  emp?: string;
+  netText?: string;
+  isOff?: boolean;
+  isTeam?: boolean;
 };
 
 type DayCell = { date: Date; items: DayCellItem[] };
@@ -73,18 +76,22 @@ export default function Page() {
   // 상세 보기/수정 모달
   const [viewId, setViewId] = useState<number | null>(null);
 
-  // 관리자/재무컬럼 유무
+  // 권한 상태
   const [isAdmin, setIsAdmin] = useState(false);
-  const [hasFinanceCols, setHasFinanceCols] = useState<boolean | null>(null); // null=미확인
+  const [isManager, setIsManager] = useState(false);
+  const isElevated = isAdmin || isManager;
 
-  // “여러 직원”/“휴무” 사용 가능 여부(컬럼 존재 탐지)
+  // 금액 컬럼 존재 여부
+  const [hasFinanceCols, setHasFinanceCols] = useState<boolean | null>(null);
+
+  // “여러 직원”/“휴무” 사용 가능 여부
   const [supportsMultiEmp, setSupportsMultiEmp] = useState<boolean>(false);
   const [supportsOff, setSupportsOff] = useState<boolean>(false);
 
-  // 입력 폼 상태 (종료시간 제거)
+  // 입력 폼 상태
   const [form, setForm] = useState<{
     title: string;
-    empNames: string[];   // ✅ 여러 명
+    empNames: string[];
     customerName: string;
     customerPhone: string;
     siteAddress: string;
@@ -94,7 +101,7 @@ export default function Page() {
     material: number;
     wage: number;
     extra: number;
-    offDay: boolean;      // ✅ 휴무
+    offDay: boolean;
   }>({
     title: '',
     empNames: [],
@@ -104,50 +111,74 @@ export default function Page() {
     offDay: false,
   });
 
-  // 직원 마스터 목록(회원가입 시 프로필에서 자동 등록된 이름)
+  // 직원 마스터 목록
   const [empMasterNames, setEmpMasterNames] = useState<string[]>([]);
-  // 검색어(추가/수정 모달용)
+  // 검색어
   const [empSearch, setEmpSearch] = useState<string>('');
   const [empEditSearch, setEmpEditSearch] = useState<string>('');
   const [myName, setMyName] = useState<string>('');
-  /* ====== 관리자 판별 + 내 이름 로드 ====== */
-useEffect(() => {
-  (async () => {
-    const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
-      .split(',').map(s => s.trim()).filter(Boolean);
-    const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
-      .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-    const { data: { session } } = await supabase.auth.getSession();
-    const uid = session?.user?.id ?? '';
-    const email = (session?.user?.email ?? '').toLowerCase();
+  /* ✅ 자재/지역 상태 (추가·수정 공용 사용) */
+  const [materials, setMaterials] = useState<MaterialPub[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [matLines, setMatLines] = useState<MatLine[]>([]); // 추가 모달용
 
-    // 1) 환경변수 관리자
-    let elevated =
-      (!!uid && adminIds.includes(uid)) ||
-      (!!email && adminEmails.includes(email));
+  /* ====== 관리자/매니저 판별 + 내 이름 로드 ====== */
+  useEffect(() => {
+    (async () => {
+      const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
+        .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-    // 2) 프로필 기반 관리자/매니저 & 내 이름
-    if (uid) {
-      const { data: me } = await supabase
-        .from('profiles')
-        .select('full_name, is_admin, is_manager')
-        .eq('id', uid)
-        .maybeSingle();
+      const { data: { session } } = await supabase.auth.getSession();
+      const uid = session?.user?.id ?? '';
+      const email = (session?.user?.email ?? '').toLowerCase();
 
-      if (me?.is_admin || me?.is_manager) elevated = true;
+      const envAdmin =
+        (!!uid && adminIds.includes(uid)) ||
+        (!!email && adminEmails.includes(email));
 
-      // 🔑 내 이름을 반드시 저장 (프런트 필터용)
-      const fallback = (session?.user?.email?.split('@')[0] ?? '').trim();
-      setMyName(((me?.full_name ?? '') || fallback).trim());
-    } else {
-      setMyName((session?.user?.email?.split('@')[0] ?? '').trim());
-    }
+      if (uid) {
+        const { data: me } = await supabase
+          .from('profiles')
+          .select('full_name, is_admin, is_manager')
+          .eq('id', uid)
+          .maybeSingle();
 
-    setIsAdmin(!!elevated); // 매니저도 관리자처럼 취급
-  })();
-}, []);
+        setIsAdmin(!!me?.is_admin || envAdmin);
+        setIsManager(!!me?.is_manager);
 
+        const fallback = (session?.user?.email?.split('@')[0] ?? '').trim();
+        setMyName(((me?.full_name ?? '') || fallback).trim());
+      } else {
+        setIsAdmin(envAdmin);
+        setIsManager(false);
+        setMyName((session?.user?.email?.split('@')[0] ?? '').trim());
+      }
+    })();
+  }, []);
+
+  /* ✅ 자재/지역 1회 로드 */
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: mats } = await supabase
+          .from('materials_public')
+          .select('id,name,vendor,unit_price_visible')
+          .order('name', { ascending: true })
+          .returns<MaterialPub[]>();
+        if (mats) setMaterials(mats);
+
+        const { data: locs } = await supabase
+          .from('material_locations')
+          .select('id,name')
+          .order('name', { ascending: true })
+          .returns<Location[]>();
+        if (locs) setLocations(locs);
+      } catch {}
+    })();
+  }, []);
 
   /* ====== 달력 범위 ====== */
   const monthStart = startOfMonth(baseDate);
@@ -155,42 +186,35 @@ useEffect(() => {
   const gridStart  = startOfWeek(monthStart);
   const gridEnd    = endOfWeek(monthEnd);
 
-    /* ====== 데이터 로드 (권한/내이름 기반 서버측 필터 적용) ====== */
+  /* ====== 데이터 로드 ====== */
   const load = async () => {
     setLoading(true);
     setMsg(null);
 
     try {
-      // 직원/일반 모드에서 내 이름 필요
       const me = (myName ?? '').trim();
-
-      // 직원 모드인데 아직 내 이름을 못 가져온 상태면 불러오지 않음
-      if (!isAdmin && !me) {
+      if (!isElevated && !me) {
         setRows([]);
         setLoading(false);
         return;
       }
 
-      // 1) 스케줄 로드 (신규 컬럼 우선 시도)
       const sel1 =
         'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
 
-      // 기본 쿼리: 뷰에서 읽기
       let query = supabase
         .from('schedules_secure')
         .select(sel1)
         .order('start_ts', { ascending: true });
 
-      // ✅ 직원(비관리자)인 경우 서버단에서 "내 이름 포함 일정"만 가져오기
-      if (!isAdmin) {
-        const esc = me.replace(/([{}%,])/g, ''); // 간단 이스케이프
+      if (!isElevated) {
+        const esc = me.replace(/([{}%,])/g, '');
         query = query.or(`employee_names.cs.{${esc}},employee_name.ilike.%${esc}%`);
       }
 
       let { data, error } = await query.returns<Row[]>();
 
       if (error) {
-        // 2차: 안전 컬럼만
         setHasFinanceCols(false);
         setSupportsMultiEmp(false);
         setSupportsOff(false);
@@ -203,7 +227,7 @@ useEffect(() => {
           .select(sel2)
           .order('start_ts', { ascending: true });
 
-        if (!isAdmin) {
+        if (!isElevated) {
           const esc = me.replace(/([{}%,])/g, '');
           q2 = q2.or(`employee_names.cs.{${esc}},employee_name.ilike.%${esc}%`);
         }
@@ -212,7 +236,6 @@ useEffect(() => {
         data = fallback.data ?? [];
         error = fallback.error;
       } else {
-        // ✅ 컬럼 지원 여부 판별
         setHasFinanceCols(true);
         const hasMulti = !!(data && (Array.isArray(data[0]?.employee_names) || data.some(r => Array.isArray(r.employee_names))));
         const hasOff   = !!(data && (typeof data[0]?.off_day === 'boolean' || data.some(r => typeof r.off_day === 'boolean')));
@@ -227,7 +250,6 @@ useEffect(() => {
         setRows(data ?? []);
       }
 
-      // 2) 직원 마스터 로드
       await loadProfiles();
     } catch (e: any) {
       setMsg(`불러오기 오류: ${e?.message ?? String(e)}`);
@@ -240,19 +262,7 @@ useEffect(() => {
     }
   };
 
-
   const loadProfiles = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .order('full_name', { ascending: true })
-        .returns<ProfileName[]>();
-
-    }
-    catch (e) {
-      // noop
-    }
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -273,13 +283,9 @@ useEffect(() => {
     }
   };
 
-    // 권한/내이름 준비 후 로드
-  useEffect(() => { 
-    load(); 
-  }, [isAdmin, myName]);
+  useEffect(() => { load(); }, [isElevated, myName]);
 
-
-  // Realtime - schedules (원본 테이블에서 변경 발생 시 새로 불러오기)
+  // Realtime - schedules
   useEffect(() => {
     const channel = supabase
       .channel('calendar-schedules')
@@ -288,7 +294,7 @@ useEffect(() => {
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  // Realtime - profiles (직원 가입/이름변경 시 즉시 드롭다운 갱신)
+  // Realtime - profiles
   useEffect(() => {
     const channel = supabase
       .channel('profiles-realtime')
@@ -299,24 +305,20 @@ useEffect(() => {
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  /* ====== 상단 직원 필터 옵션 (✅ 이름만) ====== */
+  /* ====== 상단 직원 필터 옵션 ====== */
   const empNameListFromRows = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
-
     const pushName = (nm: string | null | undefined) => {
       const raw = (nm ?? '').trim();
       if (!raw) return;
       const k = raw.toLowerCase();
       if (!seen.has(k)) { seen.add(k); out.push(raw); }
     };
-
     for (const r of rows) {
-      // 새 컬럼이 있으면 거기서 모두 수집
       if (Array.isArray(r.employee_names) && r.employee_names.length > 0) {
         r.employee_names.forEach(n => pushName(n));
       } else {
-        // 폴백: 쉼표로 분리
         const csv = (r.employee_name ?? '').split(',').map(s => s.trim()).filter(Boolean);
         if (csv.length) csv.forEach(n => pushName(n));
       }
@@ -333,21 +335,21 @@ useEffect(() => {
       key: `name::${name.toLowerCase()}`,
       label: name,
     }));
-    return [{ key: 'all', label: '전체 직원' }, ...list];
-  }, [empNameList]);
+    return isElevated ? [{ key: 'all', label: '전체 직원' }, ...list] : list;
+  }, [empNameList, isElevated]);
 
   /* ====== 상단 직원 필터 적용 ====== */
   const filteredRows = useMemo(() => {
-    if (selectedEmp === 'all') return rows;
-    if (selectedEmp.startsWith('name::')) {
-      const norm = selectedEmp.slice('name::'.length);
-      return rows.filter(r => {
-        const names = effectiveNames(r);
-        return names.some(nm => nm.toLowerCase() === norm);
-      });
-    }
-    return rows;
-  }, [rows, selectedEmp]);
+    const effective = !isElevated && selectedEmp === 'all' ? rows : (
+      selectedEmp.startsWith('name::')
+        ? rows.filter(r => {
+            const norm = selectedEmp.slice('name::'.length);
+            return effectiveNames(r).some(nm => nm.toLowerCase() === norm);
+          })
+        : rows
+    );
+    return effective;
+  }, [rows, selectedEmp, isElevated]);
 
   /* ====== 달력 6주(42칸) 셀 데이터 ====== */
   const days: DayCell[] = useMemo(() => {
@@ -357,7 +359,7 @@ useEffect(() => {
       const items: DayCellItem[] = filteredRows
         .filter(r => {
           const s = safeParse(r.start_ts);
-          const e = r.end_ts ? safeParse(r.end_ts) : s; // 종료 없으면 시작과 동일
+          const e = r.end_ts ? safeParse(r.end_ts) : s;
           if (!s || !e) return false;
           return isWithin(s, e, cur);
         })
@@ -374,15 +376,16 @@ useEffect(() => {
             emp: empStr || undefined,
             isOff,
             isTeam,
-            // ✅ 관리자에게만 순익 힌트 표시 (뷰가 값 마스킹하므로 여기선 단순 존재 체크)
-            netText: isAdmin && net != null ? `순익 ${formatKRW(net)}` : undefined,
+            netText:
+              isAdmin && net != null ? `순익 ${formatKRW(net)}`
+              : (isManager && net != null ? '순익 ***' : undefined),
           };
         });
       out.push({ date: cur, items });
       cur = addDays(cur, 1);
     }
     return out;
-  }, [gridStart, gridEnd, filteredRows, isAdmin]);
+  }, [gridStart, gridEnd, filteredRows, isAdmin, isManager]);
 
   /* ====== 날짜 핸들러 ====== */
   const openAddForDate = (d: Date) => {
@@ -397,15 +400,52 @@ useEffect(() => {
     });
     setEmpSearch('');
     setDetailsOpen(false);
+    setMatLines([]); // 자재 선택 초기화
     setShowAdd({ open: true, date: d });
   };
 
   const openDayDetail = (d: Date) => setShowDay({ open: true, date: d });
   const closeDayDetail = () => setShowDay({ open: false, date: null });
 
-  // 일정 클릭 → 상세/수정 모달
   const openViewById = (id: number) => setViewId(id);
   const closeView = () => setViewId(null);
+
+  /* ✅ 스케줄 생성 후 자재 반영(추가 모달) */
+  async function afterScheduleCreated(newScheduleId: string, startDateISO?: string) {
+    const validLines = matLines
+      .filter((ln) => ln.material_id && ln.location_id && ln.qty !== '' && Number(ln.qty) > 0)
+      .map((ln) => ({ material_id: ln.material_id, location_id: ln.location_id, qty: Number(ln.qty) }));
+
+    if (validLines.length === 0) return;
+
+    const ids = validLines.map(v => v.material_id);
+    const { data: prices, error: pErr } = await supabase
+      .from('materials')
+      .select('id,unit_price')
+      .in('id', ids);
+    if (pErr) throw pErr;
+
+    const priceMap = new Map<string, number>();
+    (prices || []).forEach((r: any) => priceMap.set(r.id, Number(r.unit_price)));
+
+    let totalCost = 0;
+    for (const v of validLines) totalCost += Number(priceMap.get(v.material_id) || 0) * Number(v.qty);
+
+    const used_date = startDateISO || new Date().toISOString().slice(0, 10);
+    const usagesPayload = validLines.map((v) => ({
+      material_id: v.material_id,
+      location_id: v.location_id,
+      qty: v.qty,
+      used_date,
+      schedule_id: newScheduleId,
+    }));
+    const { error: uErr } = await supabase.from('material_usages').insert(usagesPayload);
+    if (uErr) throw uErr;
+
+    await supabase.from('schedules').update({ material_cost: totalCost }).eq('id', newScheduleId);
+
+    setMatLines([]);
+  }
 
   /* ====== 신규 저장 ====== */
   const saveNew = async () => {
@@ -414,11 +454,10 @@ useEffect(() => {
     setMsg(null);
 
     const startISO = fromLocal(form.start);
-    const endISO   = startISO; // 종료시간 없음
+    const endISO   = startISO;
 
-    // “여러 직원” 저장 로직: 신컬럼 우선, 없으면 employee_name에 CSV로 저장
     const empNames = (form.empNames ?? []).map(s => s.trim()).filter(Boolean);
-    const legacyEmpName = empNames.join(', '); // 폴백용 CSV
+    const legacyEmpName = empNames.join(', ');
 
     const fullPayload: Record<string, any> = {
       title: (form.title.trim() || (form.offDay ? '휴무' : '(제목없음)')),
@@ -427,53 +466,65 @@ useEffect(() => {
       customer_name: form.customerName.trim() || null,
       customer_phone: form.customerPhone.trim() || null,
       site_address: form.siteAddress.trim() || null,
-      revenue: num(form.total),        // 총작업비 = 총매출
+      revenue: num(form.total),
       material_cost: num(form.material),
       daily_wage: num(form.wage),
       extra_cost: num(form.extra),
     };
 
-    // 직원
     if (supportsMultiEmp) {
       fullPayload.employee_names = empNames.length ? empNames : null;
       fullPayload.employee_name = empNames.length === 1 ? empNames[0] : (empNames.length ? legacyEmpName : null);
     } else {
-      // 폴백: employee_name CSV
       fullPayload.employee_name = empNames.length ? legacyEmpName : null;
     }
 
-    // 휴무
     if (supportsOff) fullPayload.off_day = !!form.offDay;
     else {
-      // 폴백: 제목이 '휴무'로 시작하면 휴무 취급
       if (form.offDay && !String(fullPayload.title).startsWith('휴무')) {
         fullPayload.title = `휴무 - ${fullPayload.title}`;
       }
     }
 
-    // 1차: 전체 컬럼 시도 (쓰기이므로 원본 테이블)
-    let { error } = await supabase.from('schedules').insert(fullPayload);
-    if (error) {
-      // 2차: 안전 최소 컬럼
+    let newScheduleId: string | null = null;
+    let ins1 = await supabase.from('schedules').insert(fullPayload).select('id').single();
+    if (ins1.error) {
       const safeKeys = ['title','start_ts','end_ts','employee_name','customer_name','customer_phone','site_address'];
       const safePayload: Record<string, any> = {};
       for (const k of safeKeys) safePayload[k] = fullPayload[k];
-      const retry = await supabase.from('schedules').insert(safePayload);
-      if (retry.error) setMsg(`등록 오류: ${retry.error.message}`);
+      const ins2 = await supabase.from('schedules').insert(safePayload).select('id').single();
+      if (ins2.error) {
+        setMsg(`등록 오류: ${ins2.error.message}`);
+        setSaving(false);
+        setShowAdd({ open:false, date:null });
+        return;
+      } else {
+        newScheduleId = String(ins2.data.id);
+      }
+    } else {
+      newScheduleId = String(ins1.data.id);
+    }
+
+    try {
+      const startDateISO = (startISO || '').slice(0, 10);
+      await afterScheduleCreated(newScheduleId!, startDateISO);
+    } catch (e: any) {
+      console.warn('materials apply failed:', e?.message ?? e);
+      setMsg(`자재 반영 실패: ${e?.message ?? e}`);
     }
 
     setSaving(false);
     setShowAdd({ open:false, date:null });
   };
 
-  /* ====== 선택된 일정(상세) ====== */
+  /* ====== 선택된 일정 ====== */
   const selectedRow = useMemo(() => {
     if (viewId == null) return null;
     const r = rows.find(x => x.id === viewId) || null;
     return r;
   }, [viewId, rows]);
 
-  /* ====== 특정 날짜의 아이템 리스트(모달용) ====== */
+  /* ====== 특정 날짜의 아이템 ====== */
   const dayItems = useMemo(() => {
     if (!showDay.open || !showDay.date) return [];
     const date = showDay.date;
@@ -485,7 +536,7 @@ useEffect(() => {
     }).sort((a,b) => (a.start_ts ?? '').localeCompare(b.start_ts ?? ''));
   }, [showDay, rows]);
 
-  /* ====== 직원 검색 필터링(추가/수정) ====== */
+  /* ====== 직원 검색 필터링 ====== */
   const filteredEmpForAdd = useMemo(() => {
     const q = (empSearch ?? '').trim().toLowerCase();
     if (!q) return empNameList;
@@ -494,7 +545,7 @@ useEffect(() => {
 
   return (
     <div className="space-y-6">
-      {/* 상단 바: 월 이동 + 직원 필터 + 새로고침 */}
+      {/* 상단 바 */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
@@ -527,7 +578,7 @@ useEffect(() => {
 
       {msg && <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{msg}</div>}
 
-      {/* 달력 카드 */}
+      {/* 달력 */}
       <section className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white shadow-[0_6px_16px_rgba(2,132,199,0.08)] overflow-hidden">
         {loading ? (
           <div className="p-6 text-sm text-slate-600">불러오는 중…</div>
@@ -539,6 +590,7 @@ useEffect(() => {
             onView={openViewById}
             onDayClick={openDayDetail}
             isAdmin={isAdmin}
+            isManager={isManager}
             hasFinanceCols={hasFinanceCols}
           />
         )}
@@ -547,7 +599,7 @@ useEffect(() => {
       {/* ▶ 빠른 추가 모달 */}
       {showAdd.open && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(760px,94vw)] p-5 shadow-2xl">
+          <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w=[min(760px,94vw)] md:w-[min(760px,94vw)] p-5 shadow-2xl">
             <div className="text-lg font-bold mb-2 text-sky-800">일정 추가</div>
 
             <Field label="작업내용">
@@ -556,7 +608,6 @@ useEffect(() => {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
               <Field label="직원 이름 (여러 명 선택)">
-                {/* 🔎 검색 + 멀티셀렉트 */}
                 <div className="space-y-2">
                   <input
                     className="input"
@@ -642,6 +693,16 @@ useEffect(() => {
               </div>
             )}
 
+            {/* ✅ 자재 선택(추가 모달) */}
+            <div className="mt-4">
+              <MaterialsPicker
+                lines={matLines}
+                setLines={setMatLines}
+                materials={materials}
+                locations={locations}
+              />
+            </div>
+
             <div className="flex gap-2 justify-end pt-4">
               <button type="button" className="btn" onClick={() => setShowAdd({open:false, date:null})}>닫기</button>
               <button type="button" className="btn-primary disabled:opacity-50" disabled={saving} onClick={saveNew}>
@@ -661,43 +722,52 @@ useEffect(() => {
           onAdd={() => { openAddForDate(showDay.date!); }}
           onView={(id) => openViewById(id)}
           isAdmin={isAdmin}
+          isManager={isManager}
         />
       )}
 
-      {/* ▶ 상세/수정 모달 */}
+      {/* ▶ 상세/수정 모달 (자재 UI 포함) */}
       {viewId !== null && selectedRow && (
         <DetailModal
           row={selectedRow}
           allRows={rows}
           onClose={closeView}
           isAdmin={isAdmin}
+          isManager={isManager}
           hasFinanceCols={hasFinanceCols}
           empNameList={empNameList}
           empEditSearch={empEditSearch}
           setEmpEditSearch={setEmpEditSearch}
           supportsMultiEmp={supportsMultiEmp}
           supportsOff={supportsOff}
+          /* ✅ 자재/지역 전달 */
+          materials={materials}
+          locations={locations}
         />
       )}
     </div>
   );
 }
 
-/* ---------- 상세/수정 모달 컴포넌트 ---------- */
+/* ---------- 상세/수정 모달 ---------- */
 function DetailModal({
-  row, allRows, onClose, isAdmin, hasFinanceCols, empNameList, empEditSearch, setEmpEditSearch,
-  supportsMultiEmp, supportsOff
+  row, allRows, onClose, isAdmin, isManager, hasFinanceCols, empNameList, empEditSearch, setEmpEditSearch,
+  supportsMultiEmp, supportsOff, materials, locations
 }: {
   row: Row;
   allRows: Row[];
   onClose: () => void;
   isAdmin: boolean;
+  isManager: boolean;
   hasFinanceCols: boolean | null;
   empNameList: string[];
   empEditSearch: string;
   setEmpEditSearch: (v: string) => void;
   supportsMultiEmp: boolean;
   supportsOff: boolean;
+  /* ✅ 자재/지역 */
+  materials: MaterialPub[];
+  locations: Location[];
 }) {
   const start = row.start_ts ? parseISO(row.start_ts) : null;
   const net   = calcNet(row);
@@ -705,14 +775,14 @@ function DetailModal({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState(false); // ✅ 삭제 진행상태
+  const [deleting, setDeleting] = useState(false);
 
   const initialNames = effectiveNames(row);
 
   // 편집폼 상태
   const [edit, setEdit] = useState<{
     title: string;
-    empNames: string[];   // ✅ 여러 명
+    empNames: string[];
     customerName: string;
     customerPhone: string;
     siteAddress: string;
@@ -721,7 +791,7 @@ function DetailModal({
     material_cost?: number;
     daily_wage?: number;
     extra_cost?: number;
-    offDay: boolean;      // ✅ 휴무
+    offDay: boolean;
   }>(() => ({
     title: row.title ?? '',
     empNames: initialNames,
@@ -736,6 +806,31 @@ function DetailModal({
     offDay: effectiveOff(row),
   }));
 
+  // ✅ 수정 모달에서 쓰는 자재 라인
+  const [linesEdit, setLinesEdit] = useState<MatLine[]>([]);
+
+  // 초기 로드: 해당 일정의 자재 사용내역 불러와서 피커에 반영
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('material_usages')
+          .select('id, material_id, location_id, qty, used_date')
+          .eq('schedule_id', row.id);
+        if (!error && data) {
+          setLinesEdit(
+            data.map((u: any) => ({
+              id: crypto.randomUUID(),
+              material_id: u.material_id,
+              location_id: u.location_id,
+              qty: Number(u.qty),
+            }))
+          );
+        }
+      } catch {}
+    })();
+  }, [row.id]);
+
   // 직원 검색 필터(수정 모드)
   const filteredEmpForEdit = useMemo(() => {
     const q = (empEditSearch ?? '').trim().toLowerCase();
@@ -743,17 +838,61 @@ function DetailModal({
     return empNameList.filter(nm => nm.toLowerCase().includes(q));
   }, [empEditSearch, empNameList]);
 
+  // ✅ 자재 동기화: (1) 기존 사용내역 삭제 → (2) 새로 입력 → (3) 총 자재비 재계산/업데이트
+  async function syncMaterialsForSchedule(scheduleId: number, startDateISO: string) {
+    const valid = linesEdit
+      .filter((ln) => ln.material_id && ln.location_id && ln.qty !== '' && Number(ln.qty) > 0)
+      .map((ln) => ({ material_id: ln.material_id, location_id: ln.location_id, qty: Number(ln.qty) }));
+
+    // 모두 비우면 삭제만 하고 자재비 0 처리
+    const { error: delErr } = await supabase
+      .from('material_usages')
+      .delete()
+      .eq('schedule_id', scheduleId);
+    if (delErr) throw delErr;
+
+    if (valid.length === 0) {
+      await supabase.from('schedules').update({ material_cost: 0 }).eq('id', scheduleId);
+      return;
+    }
+
+    const ids = valid.map(v => v.material_id);
+    const { data: prices, error: pErr } = await supabase
+      .from('materials')
+      .select('id,unit_price')
+      .in('id', ids);
+    if (pErr) throw pErr;
+
+    const priceMap = new Map<string, number>();
+    (prices || []).forEach((r: any) => priceMap.set(r.id, Number(r.unit_price)));
+
+    let totalCost = 0;
+    for (const v of valid) totalCost += Number(priceMap.get(v.material_id) || 0) * Number(v.qty);
+
+    const used_date = (startDateISO || '').slice(0, 10);
+    const payload = valid.map(v => ({
+      material_id: v.material_id,
+      location_id: v.location_id,
+      qty: v.qty,
+      used_date,
+      schedule_id: scheduleId as any, // 타입 혼용 방지용(프로젝트 스키마에 맞게 동작)
+    }));
+    const { error: insErr } = await supabase.from('material_usages').insert(payload);
+    if (insErr) throw insErr;
+
+    await supabase.from('schedules').update({ material_cost: totalCost }).eq('id', scheduleId);
+  }
+
   const onSave = async () => {
     setSaving(true);
     setErr(null);
 
     const startISO = fromLocal(edit.startLocal);
-    const endISO = startISO; // 종료 없음
+    const endISO = startISO;
 
     const empNames = (edit.empNames ?? []).map(s => s.trim()).filter(Boolean);
     const legacyEmpName = empNames.join(', ');
 
-    // 전체 업데이트 페이로드
     const fullPayload: Record<string, any> = {
       title: edit.title.trim() || (edit.offDay ? '휴무' : '(제목없음)'),
       start_ts: startISO,
@@ -770,7 +909,6 @@ function DetailModal({
       fullPayload.extra_cost = num(edit.extra_cost);
     }
 
-    // 직원
     if (supportsMultiEmp) {
       fullPayload.employee_names = empNames.length ? empNames : null;
       fullPayload.employee_name = empNames.length === 1 ? empNames[0] : (empNames.length ? legacyEmpName : null);
@@ -778,7 +916,6 @@ function DetailModal({
       fullPayload.employee_name = empNames.length ? legacyEmpName : null;
     }
 
-    // 휴무
     if (supportsOff) fullPayload.off_day = !!edit.offDay;
     else {
       if (edit.offDay && !String(fullPayload.title).startsWith('휴무')) {
@@ -786,11 +923,10 @@ function DetailModal({
       }
     }
 
-    // 1차: 모든 컬럼으로 업데이트 (쓰기이므로 원본 테이블)
+    // 1) 일정 업데이트
     let { error } = await supabase.from('schedules').update(fullPayload).eq('id', row.id);
-
     if (error) {
-      // 2차: 안전 최소 컬럼으로 재시도
+      // 최소 컬럼으로 재시도
       const safeKeys = ['title','start_ts','end_ts','employee_name','customer_name','customer_phone','site_address'];
       const safePayload: Record<string, any> = {};
       for (const k of safeKeys) safePayload[k] = fullPayload[k];
@@ -802,20 +938,39 @@ function DetailModal({
       }
     }
 
+    // 2) 자재 사용내역 동기화(삭제→재입력) + 자재비 자동 반영
+    try {
+      const dateISO = (startISO || '').slice(0, 10);
+      await syncMaterialsForSchedule(row.id, dateISO);
+    } catch (e: any) {
+      console.warn('materials sync failed:', e?.message ?? e);
+      setErr(`자재 동기화 실패: ${e?.message ?? e}`);
+      // 계속 진행(일정은 저장됨)
+    }
+
     setSaving(false);
     setEditing(false);
-    // Realtime 구독으로 목록/상세가 자동 갱신됨
   };
 
-  // ✅ 삭제 핸들러
+  // ✅ 삭제 핸들러: 자재 사용내역도 함께 제거
   const onDelete = async () => {
     setErr(null);
     const ok = typeof window !== 'undefined'
-      ? window.confirm('정말로 이 일정을 삭제할까요? 이 작업은 되돌릴 수 없습니다.')
+      ? window.confirm('정말로 이 일정을 삭제할까요? 연결된 자재 사용내역도 함께 삭제됩니다.')
       : true;
     if (!ok) return;
 
     setDeleting(true);
+
+    // 1) 자재 사용내역 삭제
+    const delUsage = await supabase.from('material_usages').delete().eq('schedule_id', row.id);
+    if (delUsage.error) {
+      setErr(`자재내역 삭제 오류: ${delUsage.error.message}`);
+      setDeleting(false);
+      return;
+    }
+
+    // 2) 일정 삭제
     const { error } = await supabase.from('schedules').delete().eq('id', row.id);
     if (error) {
       setErr(`삭제 오류: ${error.message}`);
@@ -823,7 +978,16 @@ function DetailModal({
       return;
     }
     setDeleting(false);
-    onClose(); // 성공 시 모달 닫기 (리얼타임으로 목록 갱신)
+    onClose();
+  };
+
+  // 💰 금액 표시 텍스트
+  const moneyText = {
+    revenue: moneyOrDash(row.revenue),
+    material: isAdmin ? moneyOrDash(row.material_cost) : (isManager ? (row.material_cost != null ? '***' : '-') : moneyOrDash(row.material_cost)),
+    wage: moneyOrDash(row.daily_wage),
+    extra: moneyOrDash(row.extra_cost),
+    net: isAdmin ? (net == null ? '-' : formatKRW(net)) : (isManager ? (net != null ? '***' : '-') : (net == null ? '-' : formatKRW(net))),
   };
 
   return (
@@ -848,26 +1012,24 @@ function DetailModal({
               <Info label="휴무" value={effectiveOff(row) ? '예' : '아니오'} />
             </div>
 
-            {/* 관리자만 재무정보 */}
-            {isAdmin && (
+            {(isAdmin || isManager) && (
               <div className="mt-4 border-t pt-3">
                 <div className="text-sm font-semibold mb-2">💰 금액 정보</div>
                 {hasFinanceCols === false ? (
                   <div className="text-sm text-slate-500">테이블에 금액 컬럼이 없어 금액 정보를 표시할 수 없습니다.</div>
                 ) : (
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                    <Info label="총매출"  value={moneyOrDash(row.revenue)} />
-                    <Info label="자재비"  value={moneyOrDash(row.material_cost)} />
-                    <Info label="인건비"  value={moneyOrDash(row.daily_wage)} />
-                    <Info label="기타비용" value={moneyOrDash(row.extra_cost)} />
-                    <Info label="순수익"  value={net == null ? '-' : formatKRW(net)} highlight />
+                    <Info label="총매출"  value={moneyText.revenue} />
+                    <Info label="자재비"  value={moneyText.material} />
+                    <Info label="인건비"  value={moneyText.wage} />
+                    <Info label="기타비용" value={moneyText.extra} />
+                    <Info label="순수익"  value={moneyText.net} highlight />
                   </div>
                 )}
               </div>
             )}
 
             <div className="mt-5 flex justify-end gap-2">
-              {/* ✅ 삭제 버튼 추가 */}
               <button
                 onClick={onDelete}
                 disabled={deleting}
@@ -906,7 +1068,6 @@ function DetailModal({
                       setEdit(s => ({ ...s, empNames: opts }));
                     }}
                   >
-                    {/* 현재 값이 목록에 없어도 보존하지 않아도 됨(모두 마스터 목록 기반 선택) */}
                     {filteredEmpForEdit.map(name => <option key={name} value={name}>{name}</option>)}
                   </select>
                   <div className="text-[11px] text-slate-500">※ Ctrl(또는 Cmd) 키로 다중 선택</div>
@@ -938,12 +1099,13 @@ function DetailModal({
               </EditField>
             </div>
 
+            {/* 💰 금액 입력은 관리자만 */}
             {isAdmin && (
               <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
                 <EditField label="총매출">
                   <input className="input" inputMode="numeric" value={edit.revenue ?? 0} onChange={e => setEdit(s => ({ ...s, revenue: int(e.target.value) }))} />
                 </EditField>
-                <EditField label="자재비">
+                <EditField label="자재비(수동)">
                   <input className="input" inputMode="numeric" value={edit.material_cost ?? 0} onChange={e => setEdit(s => ({ ...s, material_cost: int(e.target.value) }))} />
                 </EditField>
                 <EditField label="인건비">
@@ -955,6 +1117,19 @@ function DetailModal({
               </div>
             )}
 
+            {/* ✅ 자재 선택(수정 모달) — 추가 모달과 동일 UI */}
+            <div className="mt-4">
+              <MaterialsPicker
+                lines={linesEdit}
+                setLines={setLinesEdit}
+                materials={materials}
+                locations={locations}
+              />
+              <p className="text-[11px] text-slate-500 mt-2">
+                저장 시 현재 입력한 자재 사용내역으로 갈아끼우고(기존 내역 삭제), 자재비는 단가×수량으로 자동 반영됩니다.
+              </p>
+            </div>
+
             <div className="mt-5 flex justify-end gap-2">
               <button
                 onClick={onSave}
@@ -964,7 +1139,7 @@ function DetailModal({
                 저장
               </button>
               <button
-                onClick={() => { // 취소 → 원래 값으로 복구
+                onClick={() => { // 취소 → 원복
                   const names = effectiveNames(row);
                   setEdit({
                     title: row.title ?? '',
@@ -979,6 +1154,7 @@ function DetailModal({
                     extra_cost: num(row.extra_cost),
                     offDay: effectiveOff(row),
                   });
+                  setLinesEdit([]); // 자재 라인 초기화 → 모달 다시 열면 DB에서 재로딩
                   setEmpEditSearch('');
                   setEditing(false);
                 }}
@@ -996,7 +1172,7 @@ function DetailModal({
 
 /* ---------- 특정 날짜 전체 보기 모달 ---------- */
 function DayDetailModal({
-  date, items, onClose, onAdd, onView, isAdmin
+  date, items, onClose, onAdd, onView, isAdmin, isManager
 }: {
   date: Date;
   items: Row[];
@@ -1004,10 +1180,11 @@ function DayDetailModal({
   onAdd: () => void;
   onView: (id:number) => void;
   isAdmin: boolean;
+  isManager: boolean;
 }) {
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] p-5 shadow-2xl max-h-[80vh] flex flex-col">
+      <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] p-5 shadow-2xl max-h=[80vh] md:max-h-[80vh] flex flex-col">
         <div className="flex items-start justify-between mb-3">
           <h2 className="text-lg font-bold text-sky-800">📅 {fmt(date, 'yyyy-MM-dd')} 일정({items.length}건)</h2>
           <button onClick={onClose} className="text-slate-500 hover:text-slate-800">✕</button>
@@ -1037,9 +1214,7 @@ function DayDetailModal({
                 }`}
                 title="클릭하여 상세 보기"
               >
-                {/* 팀 표시용 파란 바 */}
                 {isTeam && <span className="absolute left-0 top-0 h-full w-1 bg-sky-500 rounded-l-md" />}
-
                 <div className="flex items-center justify-between">
                   <div className="font-medium text-slate-800 truncate">
                     {r.title ?? (isOff ? '휴무' : '(제목없음)')}
@@ -1051,6 +1226,7 @@ function DayDetailModal({
                   {r.site_address && <span>📍 {r.site_address}</span>}
                   {r.customer_name && <span>🙍 {r.customer_name}</span>}
                   {isAdmin && net != null && <span className="font-semibold text-amber-700">💰 순익 {formatKRW(net)}</span>}
+                  {isManager && net != null && !isAdmin && <span className="font-semibold text-amber-700">💰 순익 ***</span>}
                   {isOff && <span className="text-rose-600 font-semibold">⛔ 휴무</span>}
                 </div>
               </button>
@@ -1075,7 +1251,6 @@ function Info({ label, value, highlight }: { label: string; value: React.ReactNo
     </div>
   );
 }
-
 function EditField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
@@ -1084,8 +1259,6 @@ function EditField({ label, children }: { label: string; children: React.ReactNo
     </label>
   );
 }
-
-/* ---------- 서브 컴포넌트 ---------- */
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
@@ -1097,27 +1270,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /* ---------- 달력 그리드 ---------- */
 function MonthGrid({
-  days, baseDate, onAdd, onView, onDayClick, isAdmin, hasFinanceCols,
+  days, baseDate, onAdd, onView, onDayClick, isAdmin, isManager, hasFinanceCols,
 }: {
   days: DayCell[]; baseDate: Date;
   onAdd: (d: Date) => void;
   onView: (id: number) => void;
   onDayClick: (d: Date) => void;
   isAdmin: boolean;
+  isManager: boolean;
   hasFinanceCols: boolean | null;
 }) {
   const weekDays = ['일','월','화','수','목','금','토'];
 
   return (
     <div>
-      {/* 요일 헤더 */}
       <div className="grid grid-cols-7 bg-sky-50/60 border-b border-sky-100">
         {weekDays.map(w => (
           <div key={w} className="p-2 text-center text-sm font-semibold text-sky-900">{w}</div>
         ))}
       </div>
-
-      {/* 날짜 셀 */}
       <div className="grid grid-cols-7">
         {days.map(({ date, items }, idx) => {
           const outMonth = !isSameMonth(date, baseDate);
@@ -1125,7 +1296,6 @@ function MonthGrid({
           return (
             <div key={idx} className="h-44 border-b border-r border-sky-100 p-1 align-top">
               <div className="flex items-center justify-between mb-1">
-                {/* 📌 날짜 숫자 클릭 → 그 날짜 전체 보기 */}
                 <button
                   className={`text-xs rounded px-1 ${outMonth ? 'text-slate-400' : 'text-slate-800 hover:bg-slate-100'}`}
                   onClick={() => onDayClick(new Date(date))}
@@ -1160,13 +1330,11 @@ function MonthGrid({
                       } relative`}
                       title={r.emp ? `${r.title}\n(${r.emp})` : r.title}
                     >
-                      {/* 공동작업 파란 바 */}
                       {r.isTeam && <span className="absolute left-0 top-0 h-full w-0.5 bg-sky-500 rounded-l" />}
-
                       <div className="truncate font-medium text-slate-800">{r.title}</div>
                       {r.emp && <div className="truncate text-[10px] text-slate-600">{r.emp}</div>}
                       {r.isOff && <div className="mt-0.5 text-[10px] text-rose-600 font-semibold">⛔ 휴무</div>}
-                      {isAdmin && (
+                      {(isAdmin || isManager) && (
                         <div className="mt-0.5 text-[10px] text-slate-700">
                           {r.netText ?? (hasFinanceCols === false ? <span className="text-slate-400">순익 -</span> : null)}
                         </div>
@@ -1235,7 +1403,6 @@ function uniqueNames(arr: string[]) {
   }
   return out.sort((a,b)=>a.localeCompare(b,'ko'));
 }
-/** 여러 직원 이름을 “항상 배열”로 만들어줌 (employee_names → 있으면 사용, 없으면 employee_name CSV 분해) */
 function effectiveNames(r: Row): string[] {
   if (Array.isArray(r.employee_names) && r.employee_names.length) {
     return r.employee_names.map(s => (s ?? '').trim()).filter(Boolean);
@@ -1246,7 +1413,6 @@ function effectiveNames(r: Row): string[] {
     .filter(Boolean);
   return csv;
 }
-/** 휴무 여부 계산: off_day 컬럼이 있으면 우선, 없으면 title이 ‘휴무’/’[휴무]’로 시작하면 true */
 function effectiveOff(r: Row): boolean {
   if (typeof r.off_day === 'boolean') return r.off_day;
   const t = (r.title ?? '').trim();
