@@ -608,11 +608,11 @@ export default function ReportsPage() {
           ) : (
             <>
               {/* 📱 모바일: 카드형 요약 리스트 — 합계를 맨 위로 (5줄) */}
-              <div className="sm:hidden">
+              <div className="md:hidden">
                 <MobileSummaryCards mode={mode} data={grouped} isAdmin={isAdmin} />
               </div>
-              {/* 🖥️ 데스크탑/태블릿: 표 — 헤더 아래 합계(5줄 박스) */}
-              <div className="hidden sm:block">
+              {/* 🖥️ 데스크탑/태블릿: 표 — 각 컬럼에 맞춘 합계 1행 */}
+              <div className="hidden md:block">
                 <TableReport mode={mode} data={grouped} isAdmin={isAdmin} />
               </div>
             </>
@@ -623,7 +623,7 @@ export default function ReportsPage() {
   );
 }
 
-/* =================== 모바일 카드 요약 표 (합계 먼저 — 5줄) =================== */
+/* =================== 모바일 카드 요약 표 =================== */
 function MobileSummaryCards({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdmin: boolean }) {
   const head = mode === 'employee' ? '직원' : '기간';
 
@@ -665,7 +665,7 @@ function MobileSummaryCards({ mode, data, isAdmin }: { mode: Mode; data: Grouped
   );
 }
 
-/* =================== 데스크탑 표 (헤더 아래 합계 박스 — 5줄) =================== */
+/* =================== 데스크탑 표 (합계 1행을 컬럼 맞춤) =================== */
 function TableReport({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdmin: boolean; }) {
   const baseHeaders = mode === 'employee'
     ? ['직원', '건수', '매출', '자재비', '인건비', '기타비용']
@@ -677,29 +677,26 @@ function TableReport({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdm
     <div className="overflow-x-auto">
       <table className="min-w-[760px] w-full border border-sky-100">
         <thead className="bg-sky-50">
-          {/* 1) 헤더 행 */}
           <tr>
             {baseHeaders.map(h => (
               <th key={h} className="border border-sky-100 px-2 py-1 text-left text-sm">{h}</th>
             ))}
             <th className="border border-sky-100 px-2 py-1 text-left text-sm">순수익</th>
           </tr>
-
-          {/* 2) 합계: 한 셀로 전체 열을 합쳐 5줄로 표시 */}
-          <tr>
-            <th colSpan={7} className="border border-sky-100 px-3 py-2 text-sm bg-sky-100/60">
-              <div className="space-y-1">
-                <div className="font-semibold">합계 • 건수 {data.total.count}</div>
-                <div>매출 {fmtMoney(data.total.revenue)}</div>
-                <div>인건비 {fmtMoney(data.total.daily_wage)}</div>
-                <div>기타 {fmtMoney(data.total.extra_cost)}</div>
-                <div>{isAdmin ? `순수익 ${fmtMoney(totalNet)}` : '순수익 ***'}</div>
-              </div>
-            </th>
-          </tr>
         </thead>
 
         <tbody>
+          {/* ✅ 합계 행: 각 컬럼에 맞춰 배치 */}
+          <tr className="bg-sky-100/60 font-medium">
+            <td className="border border-sky-100 px-2 py-2 text-sm">금액합계</td>
+            <td className="border border-sky-100 px-2 py-2 text-sm">{data.total.count}</td>
+            <td className="border border-sky-100 px-2 py-2 text-sm">{fmtMoney(data.total.revenue)}</td>
+            <td className="border border-sky-100 px-2 py-2 text-sm">{isAdmin ? fmtMoney(data.total.material_cost_visible) : '***'}</td>
+            <td className="border border-sky-100 px-2 py-2 text-sm">{fmtMoney(data.total.daily_wage)}</td>
+            <td className="border border-sky-100 px-2 py-2 text-sm">{fmtMoney(data.total.extra_cost)}</td>
+            <td className="border border-sky-100 px-2 py-2 text-sm">{isAdmin ? fmtMoney(totalNet) : '***'}</td>
+          </tr>
+
           {data.rows.map(r => {
             const net = computeNetGrouped(r);
             return (
@@ -749,7 +746,7 @@ function LineChart({ labels, values, curved }: { labels: string[]; values: numbe
     <div className="overflow-x-auto">
       <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMinYMin meet" style={{ display: 'block' }}>
         <line x1={pad.l} y1={h - pad.b} x2={w - pad.r} y2={h - pad.b} stroke="#ddd" />
-        <line x1={pad.l} y1={pad.t} x2={pad.l} y2={h - pad.b} stroke="#ddd" />
+        <line x1={pad.l} y1={pad.t} x2={h - pad.b} y2={h - pad.b} stroke="#ddd" />
 
         {yTicks.map((t, i) => (
           <g key={i}>
