@@ -1,4 +1,4 @@
-// FILE: components/AuthBar.tsx
+// FILE: app/components/AuthBar.tsx
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
@@ -11,17 +11,14 @@ type SbUser = {
   user_metadata?: Record<string, any>;
 };
 
-/** 마운트 여부 훅 (서버/클라 첫 HTML 일치 보장용) */
 function useMounted() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   return mounted;
 }
 
-/** auth.users → public.profiles 동기화 (렌더 블로킹 금지) */
 async function ensureProfileFromAuthUser(user: SbUser | null) {
   if (!user?.id) return;
-
   const meta = user.user_metadata ?? {};
   const nameFromAuth: string | null =
     meta.display_name ?? meta.name ?? meta.full_name ?? null;
@@ -80,9 +77,8 @@ export default function AuthBar() {
   const mounted = useMounted();
   const [email, setEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-
-  // 중복 동기화 방지 + 백그라운드 실행
   const syncingRef = useRef(false);
+
   const bgSync = (user: SbUser | null) => {
     if (syncingRef.current) return;
     syncingRef.current = true;
@@ -95,20 +91,18 @@ export default function AuthBar() {
 
   useEffect(() => {
     let alive = true;
-
     (async () => {
       setLoading(true);
       const { data: { session } } = await supabase.auth.getSession();
       if (!alive) return;
-
-      const user = (session?.user ?? null) as unknown as SbUser | null;
+      const user = (session?.user ?? null) as SbUser | null;
       setEmail(user?.email ?? null);
       setLoading(false);
       bgSync(user);
     })();
 
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      const user = (session?.user ?? null) as unknown as SbUser | null;
+      const user = (session?.user ?? null) as SbUser | null;
       setEmail(user?.email ?? null);
       bgSync(user);
     });
@@ -124,13 +118,11 @@ export default function AuthBar() {
       await supabase.auth.signOut({ scope: 'local' } as any).catch(() => {});
       await supabase.auth.signOut().catch(() => {});
     } catch {}
-
     try {
       const keys = Object.keys(window.localStorage);
       keys.forEach((k) => { if (k.startsWith('sb-')) localStorage.removeItem(k); });
       sessionStorage.clear();
     } catch {}
-
     try {
       router.replace('/login');
     } catch {
@@ -138,47 +130,46 @@ export default function AuthBar() {
     }
   };
 
-  const hideOnLogin = pathname?.startsWith('/login');
-  if (hideOnLogin) return null;
+  if (pathname?.startsWith('/login')) return null;
+  if (!mounted) return null;
 
-  // 마운트 전 스켈레톤 (Hydration 불일치 차단)
-  if (!mounted) {
-    return (
-      <div className="sticky top-0 z-10 w-full border-b bg-white">
-        <div className="mx-auto max-w-screen-xl px-3 sm:px-4">
-          <div className="flex flex-col gap-2 py-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm font-semibold">집수리 관리</div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-gray-600">확인 중…</span>
-              <div className="h-7 w-16 rounded border border-gray-200 bg-gray-50" />
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // 마운트 후 실제 UI (모바일: 세로 정렬 → sm부터 가로 정렬)
   return (
-    <div className="sticky top-0 z-10 w-full border-b bg-white">
-      <div className="mx-auto max-w-screen-xl px-3 sm:px-4">
-        <div className="flex flex-col gap-2 py-2 sm:flex-row sm:items-center sm:justify-between">
+    <header className="sticky top-0 z-10 w-full border-b bg-white">
+      <div className="mx-auto max-w-screen-xl px-2 sm:px-4">
+        {/* 모바일: 얇은 바 (메뉴/로그아웃만) */}
+        <div className="flex h-12 items-center justify-between sm:hidden">
+          <button
+            className="rounded border px-3 py-1 text-sm"
+            onClick={() => window.dispatchEvent(new CustomEvent('toggle-menu'))}
+          >
+            메뉴
+          </button>
+          <button
+            className="rounded border px-3 py-1 text-sm"
+            onClick={onLogout}
+          >
+            로그아웃
+          </button>
+        </div>
+
+        {/* 데스크탑: 기존 UI 유지 */}
+        <div className="hidden sm:flex flex-col gap-2 py-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-sm font-semibold">집수리 관리</div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-gray-600">
               {loading ? '확인 중…' : (email ?? '비로그인')}
             </span>
-            {email ? (
+            {email && (
               <button
-                className="rounded border px-2 py-1 text-xs hover:bg-gray-50 min-h-[var(--tap-size)]"
+                className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
                 onClick={onLogout}
               >
                 로그아웃
               </button>
-            ) : null}
+            )}
           </div>
         </div>
       </div>
-    </div>
+    </header>
   );
 }
