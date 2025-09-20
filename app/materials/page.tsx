@@ -4,6 +4,71 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
+/** =================================================================================
+ *  🔐 Access Gate: 관리자/매니저만 진입 허용 (직원은 차단)
+ * ================================================================================= */
+export default function MaterialsPage() {
+  const [ready, setReady] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isManager, setIsManager] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const uid = session?.user?.id ?? '';
+        const email = (session?.user?.email ?? '').toLowerCase();
+
+        // 환경변수 기반 허용(운영 편의)
+        const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+        const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+        let envAdmin = (!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email));
+
+        let dbAdmin = false;
+        let dbManager = false;
+
+        if (uid) {
+          const { data: me } = await supabase
+            .from('profiles')
+            .select('is_admin, is_manager')
+            .eq('id', uid)
+            .maybeSingle();
+
+          dbAdmin = !!me?.is_admin;
+          dbManager = !!me?.is_manager;
+        }
+
+        setIsAdmin(envAdmin || dbAdmin);
+        setIsManager(dbManager);
+      } finally {
+        setReady(true);
+      }
+    })();
+  }, []);
+
+  if (!ready) {
+    return (
+      <div className="rounded-xl border p-4 text-sm text-slate-600">
+        권한 확인 중…
+      </div>
+    );
+  }
+
+  // ✅ 관리자 또는 매니저만 통과 (직원은 차단)
+  if (!(isAdmin || isManager)) {
+    return (
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5">
+        <div className="text-lg font-bold text-rose-700 mb-1">접근 권한이 없습니다</div>
+        <p className="text-sm text-rose-800">
+          이 페이지는 관리자/매니저만 사용할 수 있습니다.
+        </p>
+      </div>
+    );
+  }
+
+  return <MaterialsInner />;
+}
+
 /** ===== 타입 ===== */
 type MaterialPub = {
   id: string;
@@ -45,7 +110,10 @@ type Movement = {
   employee_label?: string | null;
 };
 
-export default function MaterialsPage() {
+/** =================================================================================
+ *  📦 기존 자재 페이지 본문 (변경 없음)
+ * ================================================================================= */
+function MaterialsInner() {
   const [tab, setTab] = useState<'register' | 'inbound' | 'stock' | 'settings'>('register');
 
   // 등록 폼
@@ -258,7 +326,7 @@ export default function MaterialsPage() {
     setMsg('입고 반영 완료 (+재고)');
   }
 
-  /** ===== 지역 추가(✅ 추가된 부분) ===== */
+  /** ===== 지역 추가 ===== */
   async function onAddLocation() {
     const name = (newLoc ?? '').trim();
     if (!name) {
@@ -712,57 +780,59 @@ export default function MaterialsPage() {
 
             {/* 리스트 */}
             <div className="mt-2 divide-y">
-              {filteredStockMob.map(([matId, row]) => {
-                const totalAll = totalByMatAllLoc.get(matId) ?? 0;
-                const oneLocQty = mobileStockLoc === 'ALL' ? null : (row.stocks[mobileStockLoc] ?? 0);
-                return (
-                  <div key={matId} className="py-2">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <div className="font-semibold text-[14px]">{row.material_name}</div>
-                      <div className="text-[11px] text-slate-500">{row.vendor || '-'}</div>
-                    </div>
+              {Array.from(pivot.entries())
+                .filter(([matId, row]) => {
+                  const q = stockSearch.trim().toLowerCase();
+                  return !q || row.material_name.toLowerCase().includes(q) || (row.vendor ?? '').toLowerCase().includes(q);
+                })
+                .map(([matId, row]) => {
+                  const totalAll = totalByMatAllLoc.get(matId) ?? 0;
+                  const oneLocQty = mobileStockLoc === 'ALL' ? null : (row.stocks[mobileStockLoc] ?? 0);
+                  return (
+                    <div key={matId} className="py-2">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <div className="font-semibold text-[14px]">{row.material_name}</div>
+                        <div className="text-[11px] text-slate-500">{row.vendor || '-'}</div>
+                      </div>
 
-                    {/* 수량 요약 */}
-                    <div className="mt-1 flex items-center gap-3 text-[12px]">
-                      <span className="px-2 py-0.5 rounded bg-sky-50 border border-sky-100">
-                        전체 {totalAll}
-                      </span>
-                      {mobileStockLoc !== 'ALL' && (
-                        <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-100">
-                          {locations.find(l=>l.id===mobileStockLoc)?.name}: {oneLocQty}
+                      {/* 수량 요약 */}
+                      <div className="mt-1 flex items-center gap-3 text-[12px]">
+                        <span className="px-2 py-0.5 rounded bg-sky-50 border border-sky-100">
+                          전체 {totalAll}
                         </span>
-                      )}
-                    </div>
+                        {mobileStockLoc !== 'ALL' && (
+                          <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-100">
+                            {locations.find(l=>l.id===mobileStockLoc)?.name}: {oneLocQty}
+                          </span>
+                        )}
+                      </div>
 
-                    {/* 액션 버튼 */}
-                    <div className="mt-1">
-                      {mobileStockLoc === 'ALL' ? (
-                        <div className="flex flex-wrap gap-1">
-                          {locations.map(l => (
-                            <button
-                              key={l.id}
-                              className="text-[11px] px-2 py-1 rounded border border-slate-200"
-                              onClick={()=>openDetail(matId, l.id)}
-                            >
-                              {l.name} 상세
-                            </button>
-                          ))}
-                        </div>
-                      ) : (
-                        <button
-                          className="text-[12px] px-3 py-1 rounded border border-slate-300"
-                          onClick={()=>openDetail(matId, mobileStockLoc)}
-                        >
-                          상세 보기
-                        </button>
-                      )}
+                      {/* 액션 버튼 */}
+                      <div className="mt-1">
+                        {mobileStockLoc === 'ALL' ? (
+                          <div className="flex flex-wrap gap-1">
+                            {locations.map(l => (
+                              <button
+                                key={l.id}
+                                className="text-[11px] px-2 py-1 rounded border border-slate-200"
+                                onClick={()=>openDetail(matId, l.id)}
+                              >
+                                {l.name} 상세
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <button
+                            className="text-[12px] px-3 py-1 rounded border border-slate-300"
+                            onClick={()=>openDetail(matId, mobileStockLoc)}
+                          >
+                            상세 보기
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-              {filteredStockMob.length === 0 && (
-                <div className="py-3 text-[12px] text-slate-500">검색 결과가 없습니다.</div>
-              )}
+                  );
+                })}
             </div>
           </div>
         </div>
@@ -869,8 +939,8 @@ function fmtDateTime(iso: string | null | undefined) {
     const y = d.getFullYear();
     const M = String(d.getMonth() + 1).padStart(2, '0');
     const D = String(d.getDate()).padStart(2, '0');
-    const h = String(d.getHours()).padStart(2, '0');
-    const m = String(d.getMinutes()).padStart(2, '0');
+    const h = String(d.getHours()).toString().padStart(2, '0');
+    const m = String(d.getMinutes()).toString().padStart(2, '0');
     return `${y}-${M}-${D} ${h}:${m}`;
   } catch {
     return iso;
