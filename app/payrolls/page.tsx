@@ -559,7 +559,56 @@ export default function Page() {
 
       {/* 컨트롤바 (파스텔 블루 카드) */}
       <div className="card border-sky-100 ring-1 ring-sky-100/70 shadow-[0_6px_16px_rgba(2,132,199,0.08)]">
-        <div className="flex flex-wrap items-end gap-4">
+        {/* 📱 모바일: 2줄(1줄: 월선택+보기 / 2줄: 직원필터)로 컴팩트 배치 */}
+        <div className="sm:hidden">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[11px] text-slate-600 mb-1">월 선택</label>
+              <input
+                type="month"
+                className="input h-8 px-2 text-[13px] w-full"
+                value={month}
+                onChange={e => setMonth(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] text-slate-600 mb-1">보기</label>
+              <select
+                className="select h-8 px-2 text-[13px] w-full"
+                value={mode}
+                onChange={e => setMode(e.target.value as any)}
+              >
+                <option value="employee">직원별 집계</option>
+                <option value="list">목록</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-2">
+            <label className="block text-[11px] text-slate-600 mb-1">
+              직원 필터
+              {(profilesLoading || profilesErr) && (
+                <span className="ml-1 text-[10px] text-slate-500 align-middle">
+                  {profilesLoading ? '불러오는 중…' : `오류: ${profilesErr}`}
+                </span>
+              )}
+            </label>
+            <select
+              className="select h-8 px-2 text-[13px] w-full"
+              value={empFilter}
+              onChange={e => setEmpFilter(e.target.value)}
+            >
+              {empOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </div>
+
+          <div className="mt-2 text-[11px] text-slate-600 text-right">
+            선택 지급은 <b>관리자 전용</b>입니다.
+          </div>
+        </div>
+
+        {/* 🖥️ 데스크탑/태블릿: 기존 배치 유지 */}
+        <div className="hidden sm:flex flex-wrap items-end gap-4">
           <div>
             <label className="block text-xs text-slate-600 mb-1">월 선택</label>
             <input
@@ -772,7 +821,7 @@ function ListTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-[1080px] w-full text-sm">
+      <table className="min-w-[920px] w-full text-[13px] table-fixed">
         <thead className="bg-sky-50/60 border-b border-sky-100">
           <tr>
             <Th>직원</Th>
@@ -891,7 +940,7 @@ function EmployeeTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-[860px] w-full text-sm">
+      <table className="min-w-[600px] w-full text-sm">
         <thead className="bg-sky-50/60 border-b border-sky-100">
           <tr>
             <Th>직원</Th>
@@ -963,7 +1012,7 @@ function Th(props: React.ThHTMLAttributes<HTMLTableHeaderCellElement>) {
   return (
     <th
       {...rest}
-      className={`px-2 py-2 text-left text-[13px] font-semibold text-sky-900 ${className}`}
+      className={`px-1 py-1 text-left text-[13px] font-semibold text-sky-900 ${className}`}
     >
       {children}
     </th>
@@ -974,7 +1023,7 @@ function Td(props: React.TdHTMLAttributes<HTMLTableCellElement>) {
   return (
     <td
       {...rest}
-      className={`px-2 py-2 align-top ${className}`}
+      className={`px-1 py-1 align-top ${className}`}
     >
       {children}
     </td>

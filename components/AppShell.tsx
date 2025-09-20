@@ -39,12 +39,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   // ------- 세션 상태 -------
-  // ready: 세션 판정 완료 여부
-  // authed: 로그인 여부 (판정 전엔 null)
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState<boolean | null>(null);
 
-  // 낙관적 로그인: 로컬스토리지에 sb- 토큰이 있으면 "잠정 로그인"으로 가정(튕김 방지)
+  // 낙관적 로그인
   const optimisticAuthed = useMemo(() => {
     try {
       const keys = Object.keys(localStorage);
@@ -52,7 +50,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     } catch { return false; }
   }, []);
 
-  // 첫 페인트에서 튕김 방지용: 판정 전엔 리다이렉트 금지
+  // 첫 페인트에서 튕김 방지용
   const [allowRedirect, setAllowRedirect] = useState(false);
 
   // 모바일 사이드바
@@ -62,7 +60,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // ✅ 중복 리다이렉트 가드
   const redirectedRef = useRef(false);
 
-  // 세션 초기화: 느려도 기다리고, 판정 나올 때까지는 절대 리다이렉트 안 함
+  // 세션 초기화
   useEffect(() => {
     let mounted = true;
 
@@ -71,14 +69,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       if (!mounted) return;
       setAuthed(!!session?.user);
       setReady(true);
-      // 판정이 끝난 뒤에만 리다이렉트 허용
       setAllowRedirect(true);
     })();
 
-    // 세션 변화 구독(로그인/로그아웃)
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       setAuthed(!!session?.user);
-      // 이 시점 이후에만 라우팅 보정
       setAllowRedirect(true);
     });
 
@@ -88,7 +83,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // 라우팅 보정: "판정 완료 + 리다이렉트 허용"일 때만 동작
+  // 라우팅 보정
   useEffect(() => {
     if (!allowRedirect || authed === null) return;
 
@@ -96,29 +91,24 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const onGuest = authed === false;
     const isAuthPg = isAuthRoute(pathname);
 
-    // 중복 리다이렉트/자기경로 방지
     const safeReplace = (dest: string) => {
       if (redirectedRef.current) return;
       if (pathname === dest) return;
       redirectedRef.current = true;
-      router.replace(dest); // ❌ router.refresh() 제거: 깜빡임/렉 방지
+      router.replace(dest);
     };
 
-    // 로그인 페이지에 있는데 로그인이 확인되면 대시보드로
     if (onAuth && isAuthPg) {
       safeReplace('/dashboard');
       return;
     }
-    // 보호 라우트에 있는데 "게스트"로 확정된 경우에만 로그인으로
     if (onGuest && !isAuthPg) {
       safeReplace('/login');
       return;
     }
-    // authed === null (아직 모름) 이거나 authRoute인 경우: 아무것도 하지 않음(대기)
   }, [allowRedirect, authed, pathname, router]);
 
   // 사이드바/탑탭 노출 여부
-  // 판정 전에는 낙관적으로 표시(optimisticAuthed)해서 튕김/깜빡임을 최소화
   const authRoute = isAuthRoute(pathname);
   const showSidebar = (authed ?? optimisticAuthed) && !authRoute;
 
@@ -133,8 +123,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       "
     >
       {/* TopBar */}
-      <header className="sticky top-0 z-30 border-b border-sky-100/60 bg-white/80 backdrop-blur">
-        <div className="app-container py-3 flex items-center gap-3">
+      <header className="sticky top-0 z-30 border-b border-sky-100/60 bg-white/80 backdrop-blur [writing-mode:horizontal-tb]">
+        {/* ⬇️ 모바일 세로 여백 축소: py-2, 데스크탑은 기존 py-3 유지 */}
+        <div className="app-container py-2 md:py-3 flex items-center row-tight no-vertical">
           {/* 모바일 햄버거: 로그인 후에만 */}
           {showSidebar && (
             <button
@@ -146,15 +137,32 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </button>
           )}
 
-          {/* 왼쪽 상단 로고 */}
+          {/* 왼쪽 상단 로고 
+              - 모바일: 작게(h-6)
+              - 데스크탑: 기존 크기(h-[60px]) 유지
+              - 파일 경로: /public/logo.png */}
           {showSidebar ? (
             <Link href="/dashboard" className="flex items-center">
-              <Image src="/logo.jpg" alt="집신 로고" width={60} height={60} priority />
+              <Image
+                src="/logo.png"
+                alt="집신 로고"
+                width={60}
+                height={60}
+                priority
+                className="h-12 sm:h-[60px] w-auto shrink-0 select-none"
+              />
               <span className="sr-only">대시보드</span>
             </Link>
           ) : (
             <div className="flex items-center select-none">
-              <Image src="/logo.jpg" alt="집신 로고" width={60} height={60} priority />
+              <Image
+                src="/logo.png"
+                alt="집신 로고"
+                width={60}
+                height={60}
+                priority
+                className="h-6 sm:h-[60px] w-auto shrink-0"
+              />
             </div>
           )}
 
@@ -186,7 +194,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             : 'grid-cols-1'
         }`}
       >
-        {/* 사이드바(데스크톱): 로그인 후에만 */}
+        {/* 사이드바(데스크탑): 로그인 후에만 */}
         {showSidebar && (
           <aside className="hidden lg:block">
             <Sidebar pathname={pathname ?? ''} items={NAV_SAFE} />
@@ -214,7 +222,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* 페이지 컨텐츠 */}
         <main className="min-w-0">
-          {/* ✅ 로그인/회원가입 등 "인증 라우트"에서는 스켈레톤을 아예 보여주지 않음 */}
           {!authRoute && !ready && (
             <div className="card text-sm">
               로딩 중… 네트워크/쿠키 동기화가 느릴 수 있어요.
@@ -228,7 +235,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             </div>
           )}
-          {/* ready가 아니더라도 authRoute면 children 즉시 렌더 */}
           {(authRoute || ready) && children}
         </main>
       </div>

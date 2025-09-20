@@ -1,4 +1,4 @@
-// FILE: app/components/AuthBar.tsx
+// FILE: components/AuthBar.tsx
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
@@ -17,6 +17,7 @@ function useMounted() {
   return mounted;
 }
 
+// 프로필 동기화 (원본 로직 유지)
 async function ensureProfileFromAuthUser(user: SbUser | null) {
   if (!user?.id) return;
   const meta = user.user_metadata ?? {};
@@ -130,61 +131,57 @@ export default function AuthBar() {
     }
   };
 
+  // 로그인 페이지에서는 상단바 숨김 (원본 유지)
   if (pathname?.startsWith('/login')) return null;
   if (!mounted) return null;
 
   return (
-    <header className="sticky top-0 z-10 w-full border-b bg-white">
-      <div className="mx-auto max-w-screen-xl px-2 sm:px-4">
-        {/* 모바일: 더 얇은 바 (h-10) - [메뉴][로고][이메일][로그아웃] */}
-        <div className="flex h-10 items-center justify-between sm:hidden">
-          {/* 메뉴 */}
-          <button
-            className="h-8 px-3 rounded border text-sm shrink-0"
-            onClick={() => window.dispatchEvent(new CustomEvent('toggle-menu'))}
-            aria-label="메뉴"
-          >
-            메뉴
-          </button>
+    // 글자가 세로로 세워지지 않도록 강제: writing-mode 가로 고정
+    <header className="sticky top-0 z-10 w-full border-b bg-white [writing-mode:horizontal-tb]">
+      <div className="mx-auto max-w-screen-xl px-2 sm:px-3">
+        {/* === 모바일 (<= sm) : 여백 최소화, 메뉴 버튼 제거, 글자 가로 고정 === */}
+        <div className="flex h-9 items-center justify-between gap-2 sm:hidden">
+          {/* 좌측: 로고 (필요 시 자동 숨김 처리 유지) */}
+          <img
+  src="/logo.png"
+  alt="로고"
+  className="hidden sm:block h-7 w-auto shrink-0 select-none"
+  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+/>
 
-          {/* 로고 + 이메일 (가운데 묶음) */}
-          <div className="flex items-center gap-2 min-w-0">
-            {/* 로고: 메뉴 버튼과 같은 높이(h-8) */}
-            <img
-              src="/logo.png"
-              alt="로고"
-              className="h-8 w-auto shrink-0 select-none"
-              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-            />
-            <span className="text-xs text-gray-700 truncate max-w-[55vw]">
-              {loading ? '확인 중…' : (email ?? '비로그인')}
-            </span>
-          </div>
-
-          {/* 로그아웃 */}
-          <button
-            className="h-8 px-3 rounded border text-sm shrink-0"
-            onClick={onLogout}
-            aria-label="로그아웃"
+          {/* 가운데: 이메일 (최대폭 제한 + 말줄임) */}
+          <span
+            className="min-w-0 max-w-[58vw] text-[11px] text-gray-700 truncate whitespace-nowrap"
+            title={loading ? '확인 중…' : (email ?? '비로그인')}
           >
-            로그아웃
-          </button>
+            {loading ? '확인 중…' : (email ?? '비로그인')}
+          </span>
+
+          {/* 우측: 로그아웃(아이콘 느낌으로 컴팩트) */}
+          <button
+  className="h-7 px-2 text-[11px] rounded border leading-none whitespace-nowrap hover:bg-gray-50 active:scale-[0.98] min-w-[64px]"
+  onClick={onLogout}
+  aria-label="로그아웃"
+>
+  로그아웃
+</button>
         </div>
 
-        {/* 데스크탑: 기존 UI 유지 */}
-        <div className="hidden sm:flex flex-col gap-2 py-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm font-semibold">집수리 관리</div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-gray-600">
+        {/* === 데스크탑 (>= sm) : 기존 레이아웃 유지하되 여백 살짝만 다이어트 === */}
+        <div className="hidden sm:flex sm:h-12 sm:items-center sm:justify-between sm:gap-2 sm:py-1">
+          <div className="text-sm font-semibold whitespace-nowrap">집수리 관리</div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-600 truncate whitespace-nowrap" title={loading ? '확인 중…' : (email ?? '비로그인')}>
               {loading ? '확인 중…' : (email ?? '비로그인')}
             </span>
             {email && (
               <button
-                className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
-                onClick={onLogout}
-              >
-                로그아웃
-              </button>
+  className="h-9 px-3 text-sm rounded border leading-none whitespace-nowrap hover:bg-gray-50 min-w-[72px]"
+  onClick={onLogout}
+>
+  로그아웃
+</button>
+
             )}
           </div>
         </div>

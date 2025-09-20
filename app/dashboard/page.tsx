@@ -202,7 +202,8 @@ export default function Page() {
       </header>
 
       <main className="app-container space-y-7 py-6">
-        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+        {/* 📱 모바일에서는 숨기고, ≥sm(PC/태블릿)에서만 보이게 */}
+        <section className="hidden sm:grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
           <QuickLink href="/schedules" label="스케줄" />
           <QuickLink href="/calendar" label="캘린더" />
           <QuickLink href="/payrolls" label="급여" />

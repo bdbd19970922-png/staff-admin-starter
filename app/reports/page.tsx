@@ -7,7 +7,7 @@ import {
   format, startOfMonth, endOfMonth, isAfter, isBefore, addDays,
 } from 'date-fns';
 
-// ===== 세션 준비 대기(Unauthorized 예방) =====
+/* ===== 세션 준비 대기 ===== */
 async function waitForAuthReady(maxTries = 6, delayMs = 300) {
   for (let i = 0; i < maxTries; i++) {
     const { data, error } = await supabase.auth.getSession();
@@ -30,7 +30,6 @@ type Row = {
   extra_cost?: number | null;
   net_profit_visible?: number | null;
 };
-
 type GroupedRow = {
   key: string;
   label: string;
@@ -65,10 +64,9 @@ export default function ReportsPage() {
 
   const [dateFrom, setDateFrom] = useState<string>(() => toDateInputValue(startOfMonth(new Date())));
   const [dateTo, setDateTo] = useState<string>(() => toDateInputValue(endOfMonth(new Date())));
-
   const [empNameFilter, setEmpNameFilter] = useState<string>('all');
 
-  // ===== 권한/사용자명 로드 =====
+  /* ===== 권한/사용자 로드 ===== */
   useEffect(() => {
     (async () => {
       await waitForAuthReady();
@@ -113,7 +111,7 @@ export default function ReportsPage() {
     })();
   }, []);
 
-  // ===== 데이터 로드 (보안 뷰) =====
+  /* ===== 데이터 로드 (보안 뷰) ===== */
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -146,7 +144,7 @@ export default function ReportsPage() {
     })();
   }, []);
 
-  // 권한 기반 1차 필터
+  /* ===== 필터/그룹 ===== */
   const rowsForUser = useMemo(() => {
     if (isElevated) return rows;
     const uid = (userId ?? '').trim();
@@ -159,7 +157,6 @@ export default function ReportsPage() {
     });
   }, [rows, isElevated, userId, userName]);
 
-  // 날짜 2차 필터
   const filteredByDate = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
@@ -171,34 +168,29 @@ export default function ReportsPage() {
     });
   }, [rowsForUser, dateFrom, dateTo]);
 
-  // 직원 옵션
   const employeeNameOptions = useMemo(() => {
     const set = new Set<string>();
     for (const r of filteredByDate) set.add(((r.employee_name ?? '').trim()) || '(미지정)');
     return ['전체', ...Array.from(set).sort((a,b)=>a.localeCompare(b,'ko'))];
   }, [filteredByDate]);
 
-  // 직원별 보기 추가 필터
   const filteredForBranding = useMemo(() => {
     if (mode !== 'employee' || empNameFilter === 'all') return filteredByDate;
     const target = empNameFilter;
     return filteredByDate.filter(r => (((r.employee_name ?? '').trim()) || '(미지정)').toLowerCase() === target);
   }, [filteredByDate, mode, empNameFilter]);
 
-  // 그룹핑(표)
   const grouped: Grouped = useMemo(() => {
     if (mode === 'employee') return groupByEmployee(filteredForBranding);
     if (mode === 'monthly')  return groupByMonth(filteredByDate);
     return groupByDay(filteredByDate);
   }, [filteredForBranding, filteredByDate, mode]);
 
-  // 비관리자 net 금지
   const metricSafe: Metric = useMemo(
     () => (!isAdmin && metric === 'net') ? 'revenue' : metric,
     [isAdmin, metric]
   );
 
-  // 그래프 데이터(일자 X축)
   const chartDaily = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
@@ -236,7 +228,7 @@ export default function ReportsPage() {
     return { labels, values };
   }, [filteredByDate, dateFrom, dateTo, metricSafe, mode, empNameFilter, isAdmin]);
 
-  // 급여 반영(관리자 전용)
+  /* ===== 급여 반영(관리자 전용) ===== */
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const canSyncPayroll = isAdmin && mode === 'employee';
 
@@ -412,16 +404,86 @@ export default function ReportsPage() {
           <span className="title-gradient">📊 리포트</span>
         </h1>
 
-        {/* 컨트롤 바 */}
+        {/* ===== 컨트롤 바 ===== */}
         <div className="card p-3">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          {/* 📱 모바일: 2줄(보기+지표 / 시작+종료). 곡선 체크, '이번 달' 버튼 제거 */}
+          <div className="sm:hidden">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[11px] text-gray-600 mb-1">보기</label>
+                <select
+                  className="select h-8 px-2 text-[13px] w-full"
+                  value={mode}
+                  onChange={e => setMode(e.target.value as Mode)}
+                >
+                  <option value="daily">일별</option>
+                  <option value="monthly">월별</option>
+                  <option value="employee">직원별</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-gray-600 mb-1">지표</label>
+                <select
+                  className="select h-8 px-2 text-[13px] w-full"
+                  value={(!isAdmin && metric === 'net') ? 'revenue' : metric}
+                  onChange={e => setMetric(e.target.value as Metric)}
+                >
+                  <option value="revenue">매출</option>
+                  <option value="daily_wage">인건비</option>
+                  {isAdmin && <option value="net">순수익</option>}
+                </select>
+              </div>
+            </div>
+
+            {/* 직원별일 때만 간단 필터 추가 */}
+            {mode === 'employee' && (
+              <div className="mt-2">
+                <label className="block text-[11px] text-gray-600 mb-1">직원</label>
+                <select
+                  className="select h-8 px-2 text-[13px] w-full"
+                  value={empNameFilter}
+                  onChange={e => setEmpNameFilter(e.target.value)}
+                >
+                  <option value="all">전체</option>
+                  {employeeNameOptions.slice(1).map(name => (
+                    <option key={name} value={name.toLowerCase()}>{name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <div>
+                <label className="block text-[11px] text-gray-600 mb-1">시작</label>
+                <input
+                  type="date"
+                  className="input h-8 px-2 text-[13px] w-full"
+                  value={dateFrom}
+                  onChange={e => setDateFrom(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-gray-600 mb-1">종료</label>
+                <input
+                  type="date"
+                  className="input h-8 px-2 text-[13px] w-full"
+                  value={dateTo}
+                  onChange={e => setDateTo(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 🖥️ 데스크탑/태블릿: 기존 레이아웃 유지 */}
+          <div className="hidden sm:flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex flex-col">
                 <label className="text-xs text-gray-600">보기</label>
                 <select
                   className="select min-w-[140px]"
                   value={mode}
-                  onChange={e => { setMode(e.target.value as Mode); }}
+                  onChange={e => setMode(e.target.value as Mode)}
                 >
                   <option value="daily">일별</option>
                   <option value="monthly">월별</option>
@@ -458,6 +520,7 @@ export default function ReportsPage() {
                 </select>
               </div>
 
+              {/* 데스크탑에서만 곡선 체크 표시 */}
               <label className="mt-1.5 inline-flex items-center gap-2 text-sm">
                 <input
                   id="curved"
@@ -488,6 +551,7 @@ export default function ReportsPage() {
                     onChange={e => setDateTo(e.target.value)}
                   />
                 </div>
+                {/* 데스크탑에서만 '이번 달' 유지 */}
                 <button
                   className="btn"
                   onClick={() => {
@@ -522,7 +586,7 @@ export default function ReportsPage() {
           </div>
         )}
 
-        {/* 그래프 — 잘림 방지: 스크롤 래퍼(-mx 보정) */}
+        {/* 그래프(동일) */}
         <div className="card p-0">
           <div className="-mx-4 px-4 md:mx-0 md:px-0" style={{ overflowX: 'auto', overflowY: 'visible' }}>
             {loading ? (
@@ -537,12 +601,21 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* 표 */}
+        {/* ===== 표 ===== */}
         <div className="card p-3">
           {loading ? (
             <div className="text-sm text-gray-600">불러오는 중…</div>
           ) : (
-            <TableReport mode={mode} data={grouped} isAdmin={isAdmin} />
+            <>
+              {/* 📱 모바일: 카드형 요약 리스트 — 합계를 맨 위로 (5줄) */}
+              <div className="sm:hidden">
+                <MobileSummaryCards mode={mode} data={grouped} isAdmin={isAdmin} />
+              </div>
+              {/* 🖥️ 데스크탑/태블릿: 표 — 헤더 아래 합계(5줄 박스) */}
+              <div className="hidden sm:block">
+                <TableReport mode={mode} data={grouped} isAdmin={isAdmin} />
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -550,23 +623,82 @@ export default function ReportsPage() {
   );
 }
 
-/* =================== 표 컴포넌트 =================== */
+/* =================== 모바일 카드 요약 표 (합계 먼저 — 5줄) =================== */
+function MobileSummaryCards({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdmin: boolean }) {
+  const head = mode === 'employee' ? '직원' : '기간';
+
+  const totalCard = (
+    <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 mb-2">
+      <div className="space-y-1 text-[12px]">
+        <div className="font-semibold">합계 • 건수 {data.total.count}</div>
+        <div>매출 {fmtMoney(data.total.revenue)}</div>
+        <div>인건비 {fmtMoney(data.total.daily_wage)}</div>
+        <div>기타 {fmtMoney(data.total.extra_cost)}</div>
+        <div>{isAdmin ? `순수익 ${fmtMoney(computeNetGrouped(data.total))}` : '순수익 ***'}</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-2">
+      {totalCard}
+      {data.rows.map((r) => {
+        const net = computeNetGrouped(r);
+        return (
+          <div key={r.key} className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold text-slate-900 truncate">
+                <span className="text-slate-500 mr-1">{head}:</span>{r.label}
+              </div>
+              <div className="mt-1 space-y-0.5 text-[11px] text-slate-700">
+                <div>건수 {r.count}</div>
+                <div>매출 {fmtMoney(r.revenue)}</div>
+                <div>인건비 {fmtMoney(r.daily_wage)}</div>
+                <div>기타 {fmtMoney(r.extra_cost)}</div>
+                <div>{isAdmin ? `순수익 ${fmtMoney(net)}` : '순수익 ***'}</div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =================== 데스크탑 표 (헤더 아래 합계 박스 — 5줄) =================== */
 function TableReport({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdmin: boolean; }) {
   const baseHeaders = mode === 'employee'
     ? ['직원', '건수', '매출', '자재비', '인건비', '기타비용']
     : ['기간', '건수', '매출', '자재비', '인건비', '기타비용'];
 
+  const totalNet = computeNetGrouped(data.total);
+
   return (
     <div className="overflow-x-auto">
       <table className="min-w-[760px] w-full border border-sky-100">
         <thead className="bg-sky-50">
+          {/* 1) 헤더 행 */}
           <tr>
             {baseHeaders.map(h => (
               <th key={h} className="border border-sky-100 px-2 py-1 text-left text-sm">{h}</th>
             ))}
             <th className="border border-sky-100 px-2 py-1 text-left text-sm">순수익</th>
           </tr>
+
+          {/* 2) 합계: 한 셀로 전체 열을 합쳐 5줄로 표시 */}
+          <tr>
+            <th colSpan={7} className="border border-sky-100 px-3 py-2 text-sm bg-sky-100/60">
+              <div className="space-y-1">
+                <div className="font-semibold">합계 • 건수 {data.total.count}</div>
+                <div>매출 {fmtMoney(data.total.revenue)}</div>
+                <div>인건비 {fmtMoney(data.total.daily_wage)}</div>
+                <div>기타 {fmtMoney(data.total.extra_cost)}</div>
+                <div>{isAdmin ? `순수익 ${fmtMoney(totalNet)}` : '순수익 ***'}</div>
+              </div>
+            </th>
+          </tr>
         </thead>
+
         <tbody>
           {data.rows.map(r => {
             const net = computeNetGrouped(r);
@@ -583,22 +715,6 @@ function TableReport({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdm
             );
           })}
         </tbody>
-        <tfoot className="bg-sky-50">
-          {(() => {
-            const totalNet = computeNetGrouped(data.total);
-            return (
-              <tr>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">합계</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{data.total.count}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.revenue)}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{isAdmin ? fmtMoney(data.total.material_cost_visible) : '***'}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.daily_wage)}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.extra_cost)}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{isAdmin ? fmtMoney(totalNet) : '***'}</td>
-              </tr>
-            );
-          })()}
-        </tfoot>
       </table>
     </div>
   );
@@ -608,7 +724,6 @@ function TableReport({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdm
 function LineChart({ labels, values, curved }: { labels: string[]; values: number[]; curved: boolean }) {
   const w = Math.max(320, Math.min(1040, labels.length * 64));
   const h = 280;
-  // 🔧 잘림 방지용 여백 확장
   const pad = { l: 56, r: 24, t: 18, b: 48 };
 
   const minV = Math.min(...values);
@@ -632,13 +747,7 @@ function LineChart({ labels, values, curved }: { labels: string[]; values: numbe
 
   return (
     <div className="overflow-x-auto">
-      <svg
-        width={w}
-        height={h}
-        viewBox={`0 0 ${w} ${h}`}
-        preserveAspectRatio="xMinYMin meet"
-        style={{ display: 'block' }}
-      >
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMinYMin meet" style={{ display: 'block' }}>
         <line x1={pad.l} y1={h - pad.b} x2={w - pad.r} y2={h - pad.b} stroke="#ddd" />
         <line x1={pad.l} y1={pad.t} x2={pad.l} y2={h - pad.b} stroke="#ddd" />
 

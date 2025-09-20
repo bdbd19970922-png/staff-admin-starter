@@ -22,14 +22,14 @@ async function waitForAuthReady(maxTries = 6, delayMs = 300) {
 type Row = {
   id: number;
   title: string;
-  location: string;
+  site_address: string;    // ✅ 현장주소(표시/저장 기준 컬럼)
   start_ts: string;
   end_ts: string;
   daily_wage: number;
   status: 'scheduled' | 'in_progress' | 'done' | 'cancelled';
   employee_id?: string | null;
-  employee_name?: string | null;  // 직접입력 이름
-  employee_phone?: string | null; // 직접입력 전화
+  employee_name?: string | null;   // 직접입력 이름
+  employee_phone?: string | null;  // 직접입력 전화
 };
 
 const STATUS_LABEL: Record<Row['status'], string> = {
@@ -53,6 +53,7 @@ type SchedulesSecureRow = {
   material_cost: number | null;
   extra_cost: number | null;
   net_profit_visible: number | null;
+  site_address: string | null;     // ✅ 추가
 };
 
 /* ===============================
@@ -75,7 +76,7 @@ export default function SchedulesPage() {
   }, []);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {!isReady ? (
         <div className="card text-sm">로딩 중…</div>
       ) : isAuthed ? (
@@ -119,7 +120,7 @@ function SchedulesInner() {
   const [formOpen, setFormOpen] = useState(false);
   const [f, setF] = useState({
     title: '',
-    location: '',
+    site_address: '',           // ✅ 현장주소
     start_ts: '',
     end_ts: '',
     daily_wage: 0,
@@ -143,7 +144,6 @@ function SchedulesInner() {
       const email = (session?.user?.email ?? '').toLowerCase();
       setUid(_uid);
 
-      // 환경변수 기반 관리자 호환
       const parseList = (env?: string) => (env ?? '').split(',').map(s => s.trim()).filter(Boolean);
       const adminIds = parseList(process.env.NEXT_PUBLIC_ADMIN_IDS);
       const adminEmails = parseList(process.env.NEXT_PUBLIC_ADMIN_EMAILS).map(s => s.toLowerCase());
@@ -176,25 +176,23 @@ function SchedulesInner() {
     try {
       await waitForAuthReady();
 
-      // 기본 쿼리(읽기는 보안뷰)
+      // 기본 쿼리(읽기는 보안뷰) — ✅ site_address 포함
       let query = supabase
         .from('schedules_secure')
-        .select('id,title,start_ts,end_ts,employee_id,employee_name,off_day,daily_wage,revenue,material_cost,extra_cost,net_profit_visible')
+        .select('id,title,start_ts,end_ts,employee_id,employee_name,off_day,daily_wage,revenue,material_cost,extra_cost,net_profit_visible,site_address')
         .order('start_ts', { ascending: false })
         .limit(100);
 
-      // 직원 모드: 본인 것만(서버 RLS도 걸리지만 친절용)
       if (!isElevated) {
         if (uid) {
           query = query.eq('employee_id', uid);
         } else if (fullName) {
           query = query.ilike('employee_name', `%${fullName}%`);
         } else {
-          query = query.eq('id', -1); // 안전장치
+          query = query.eq('id', -1);
         }
       }
 
-      // 승격 계정에서 “직원별 보기” 필터
       if (isElevated) {
         if (onlyMine && uid) {
           query = query.eq('employee_id', uid);
@@ -203,24 +201,22 @@ function SchedulesInner() {
         } else if (viewEmp.mode === 'manual' && viewEmp.name?.trim()) {
           query = query.ilike('employee_name', `%${viewEmp.name.trim()}%`);
         }
-        // 아무것도 선택 안 하면 전사(기본)
       }
 
       const { data, error } = await query.returns<SchedulesSecureRow[]>();
       if (error) throw error;
 
-      // 보안뷰 결과 → 화면 Row로 변환(없는 필드 기본값 보충)
       const mapped: Row[] = (data ?? []).map((r) => ({
         id: r.id,
         title: r.title ?? '',
-        location: '-',                                   // 뷰에 없음
-        status: r.off_day ? 'cancelled' : 'scheduled',  // 간단 추론/기본값
+        site_address: r.site_address ?? '',     // ✅ 현장주소 매핑
+        status: r.off_day ? 'cancelled' : 'scheduled',
         start_ts: r.start_ts,
         end_ts: r.end_ts,
         daily_wage: r.daily_wage ?? 0,
         employee_id: r.employee_id ?? null,
         employee_name: r.employee_name ?? '',
-        employee_phone: null,                            // 뷰에 없음
+        employee_phone: null,
       }));
 
       setRows(mapped);
@@ -233,7 +229,6 @@ function SchedulesInner() {
   }
 
   useEffect(() => {
-    // 권한/uid/필터가 바뀔 때마다 재조회
     loadRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isElevated, uid, fullName, viewEmp, onlyMine]);
@@ -246,7 +241,8 @@ function SchedulesInner() {
 
       const payload: any = {
         title: f.title.trim(),
-        location: f.location.trim(),
+        site_address: f.site_address.trim(),           // ✅ 캘린더 컬럼
+        location: f.site_address.trim(),               // ✅ 레거시(있다면) 동기화
         start_ts: toISO(f.start_ts),
         end_ts: toISO(f.end_ts),
         daily_wage: Number(f.daily_wage || 0),
@@ -256,7 +252,6 @@ function SchedulesInner() {
         employee_phone: null,
       };
 
-      // 직원은 본인에게만
       if (!isElevated) {
         if (!uid) {
           setMsg('세션을 다시 확인해주세요.');
@@ -272,7 +267,6 @@ function SchedulesInner() {
         payload.employee_name = (p?.full_name ?? fullName ?? '').trim() || null;
         payload.employee_phone = (p?.phone ?? '').trim() || null;
       } else {
-        // 관리자/매니저는 선택에 따라
         if (emp.mode === 'profile') {
           if (!emp.employeeId) {
             setMsg('직원을 선택해주세요.');
@@ -302,7 +296,7 @@ function SchedulesInner() {
       if (error) throw error;
 
       setFormOpen(false);
-      setF({ title: '', location: '', start_ts: '', end_ts: '', daily_wage: 0, status: 'scheduled' });
+      setF({ title: '', site_address: '', start_ts: '', end_ts: '', daily_wage: 0, status: 'scheduled' });
       setEmp({ mode: 'profile', employeeId: '' });
       await loadRows();
     } catch (e: any) {
@@ -311,7 +305,6 @@ function SchedulesInner() {
   }
 
   async function onDelete(id: number, row: Row) {
-    // 직원은 본인 일정만 삭제 가능(서버 RLS가 최종 방어)
     if (!isElevated) {
       const ownerId = (row.employee_id ?? '').trim();
       if (!(ownerId && uid && ownerId === uid)) {
@@ -346,33 +339,38 @@ function SchedulesInner() {
 
         {/* 상단 액션 */}
         <div className="flex flex-wrap items-center gap-2">
-          <button onClick={() => loadRows()} className="btn min-h-[var(--tap-size)]">새로고침</button>
-          <button onClick={() => setFormOpen((v) => !v)} className="btn-primary min-h-[var(--tap-size)]">
+          <button onClick={() => loadRows()} className="btn h-7 px-2 text-[11px] md:h-9 md:px-3 md:text-sm min-w-[68px]">
+            새로고침
+          </button>
+          <button onClick={() => setFormOpen((v) => !v)} className="btn-primary h-7 px-2 text-[11px] md:h-9 md:px-3 md:text-sm min-w-[86px]">
             {formOpen ? '등록 폼 닫기' : '+ 새 일정'}
           </button>
         </div>
       </div>
 
       {/* 보기 필터: 직원별 보기 */}
-      <section className="card">
-        <div className="flex flex-col md:flex-row items-start md:items-end gap-3">
+      <section className="card p-3 sm:p-4">
+        <div className="flex flex-col md:flex-row items-start md:items-end gap-2 md:gap-3 text-sm">
           {isElevated ? (
             <>
               <div className="grow w-full md:w-auto">
                 <EmployeePicker label="직원별 보기(선택 시 해당 직원만)" value={viewEmp} onChange={setViewEmp} />
               </div>
-              <label className="inline-flex items-center gap-2 text-sm">
+              <label className="inline-flex items-center gap-2">
                 <input type="checkbox" className="checkbox"
                   checked={onlyMine}
                   onChange={(e) => setOnlyMine(e.target.checked)} />
                 내 것만 보기
               </label>
-              <button className="btn" onClick={() => { setViewEmp({ mode: 'profile', employeeId: '' }); setOnlyMine(false); }}>
+              <button
+                className="btn h-7 px-2 text-[11px] md:h-9 md:px-3 md:text-sm"
+                onClick={() => { setViewEmp({ mode: 'profile', employeeId: '' }); setOnlyMine(false); }}
+              >
                 필터 초기화
               </button>
             </>
           ) : (
-            <label className="inline-flex items-center gap-2 text-sm">
+            <label className="inline-flex items-center gap-2">
               <input type="checkbox" className="checkbox" checked readOnly />
               직원 모드: 본인 일정만 표시됩니다
             </label>
@@ -382,19 +380,23 @@ function SchedulesInner() {
 
       {/* 인라인 등록 폼 */}
       {formOpen && (
-        <section className="card max-w-3xl">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <section className="card max-w-3xl p-3 sm:p-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 text-sm">
             <div className="md:col-span-2">
-              <label className="mb-1 block text-sm text-slate-600">제목</label>
+              <label className="mb-1 block text-slate-600">제목</label>
               <input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="작업 제목" />
             </div>
 
             <div className="md:col-span-2">
-              <label className="mb-1 block text-sm text-slate-600">장소</label>
-              <input className="input" value={f.location} onChange={(e) => setF({ ...f, location: e.target.value })} placeholder="유성구 봉명동..." />
+              <label className="mb-1 block text-slate-600">현장주소</label> {/* ✅ 라벨 변경 */}
+              <input
+                className="input"
+                value={f.site_address}
+                onChange={(e) => setF({ ...f, site_address: e.target.value })}
+                placeholder="예) 서울시 ○○구 ○○로 123"
+              />
             </div>
 
-            {/* 직원 선택/직접입력: 승격 계정만 노출(직원은 본인 고정) */}
             {isElevated && (
               <div className="md:col-span-2">
                 <EmployeePicker label="담당 직원" value={emp} onChange={setEmp} />
@@ -402,22 +404,22 @@ function SchedulesInner() {
             )}
 
             <div>
-              <label className="mb-1 block text-sm text-slate-600">시작</label>
+              <label className="mb-1 block text-slate-600">시작</label>
               <input type="datetime-local" className="input" value={f.start_ts} onChange={(e) => setF({ ...f, start_ts: e.target.value })} />
             </div>
 
             <div>
-              <label className="mb-1 block text-sm text-slate-600">종료</label>
+              <label className="mb-1 block text-slate-600">종료</label>
               <input type="datetime-local" className="input" value={f.end_ts} onChange={(e) => setF({ ...f, end_ts: e.target.value })} />
             </div>
 
             <div>
-              <label className="mb-1 block text-sm text-slate-600">일당(₩)</label>
+              <label className="mb-1 block text-slate-600">일당(₩)</label>
               <input type="number" className="input" value={f.daily_wage} onChange={(e) => setF({ ...f, daily_wage: Number(e.target.value || 0) })} min={0} />
             </div>
 
             <div>
-              <label className="mb-1 block text-sm text-slate-600">상태</label>
+              <label className="mb-1 block text-slate-600">상태</label>
               <select className="select" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value as Row['status'] })}>
                 <option value="scheduled">{STATUS_LABEL.scheduled} (예정)</option>
                 <option value="in_progress">{STATUS_LABEL.in_progress} (작업 중)</option>
@@ -433,9 +435,9 @@ function SchedulesInner() {
             </div>
           ) : null}
 
-          <div className="mt-5 flex gap-2">
-            <button onClick={onCreate} className="btn-primary px-5">등록</button>
-            <button onClick={() => setFormOpen(false)} className="btn">취소</button>
+          <div className="mt-4 md:mt-5 flex gap-2">
+            <button onClick={onCreate} className="btn-primary h-8 px-3 text-sm">등록</button>
+            <button onClick={() => setFormOpen(false)} className="btn h-8 px-3 text-sm">취소</button>
           </div>
         </section>
       )}
@@ -445,95 +447,111 @@ function SchedulesInner() {
         <div className="card border-rose-200 bg-rose-50 text-rose-700 text-sm">{msg}</div>
       ) : null}
 
-      {/* 목록 */}
+      {/* ===== 목록 ===== */}
       <section className="card">
         {loading ? (
           <div className="text-sm text-slate-600">불러오는 중…</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm table-fixed">
-              <colgroup>
-                <col className="w-[220px]" />
-                <col className="w-[220px]" />
-                <col className="w-[240px]" />
-                <col className="w-[170px]" />
-                <col className="w-[170px]" />
-                <col className="w-[140px]" />
-                <col className="w-[120px]" />
-                <col className="w-[140px]" />
-              </colgroup>
-              <thead>
-                <tr className="border-b bg-sky-50/50">
-                  <th className="p-2 text-left">제목</th>
-                  <th className="p-2 text-left">장소</th>
-                  <th className="p-2 text-left">담당</th>
-                  <th className="p-2 text-left">시작</th>
-                  <th className="p-2 text-left">종료</th>
-                  <th className="p-2 text-right">일당</th>
-                  <th className="p-2 text-left">상태</th>
-                  <th className="p-2 text-left">액션</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id} className="border-b last:border-0">
-                    <td className="p-2 truncate">{r.title}</td>
-                    <td className="p-2 truncate">{r.location}</td>
-                    <td className="p-2">
-                      {r.employee_name
-                        ? `${r.employee_name}${r.employee_phone ? ` (${r.employee_phone})` : ''}`
-                        : '-'}
-                    </td>
-                    <td className="p-2 whitespace-nowrap">{fmtLocal(r.start_ts)}</td>
-                    <td className="p-2 whitespace-nowrap">{fmtLocal(r.end_ts)}</td>
-                    <td className="p-2 text-right whitespace-nowrap">₩{Number(r.daily_wage || 0).toLocaleString()}</td>
-                    <td className="p-2"><StatusBadge status={r.status} /></td>
-                    <td className="p-2">
-                      <div className="flex gap-2">
-                        {/* 직원은 본인 일정만 수정/삭제 가능. 링크는 유지, 서버 RLS가 최종 방어 */}
-                        <Link className="btn" href={`/schedules/${r.id}/edit`}>수정</Link>
-                        <button className="btn" onClick={() => onDelete(r.id, r)}>삭제</button>
+          <>
+            {/* 📱 모바일: 카드 리스트 */}
+            <div className="sm:hidden space-y-2">
+              {rows.length === 0 && (
+                <div className="text-sm text-slate-500">
+                  데이터가 없습니다. {isElevated ? '필터를 조정하거나 “+ 새 일정”으로 추가해보세요.' : '관리자/매니저에게 일정을 배정받거나 “+ 새 일정”으로 본인 일정을 추가해보세요.'}
+                </div>
+              )}
+
+              {rows.map((r) => {
+                const start = fmtLocal(r.start_ts);
+                const end = fmtLocal(r.end_ts);
+                return (
+                  <div
+                    key={r.id}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-[0_1px_3px_rgba(0,0,0,0.04)]"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-semibold text-slate-900 truncate">{r.title || '(제목없음)'}</div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-600">
+                          {r.employee_name && <span className="truncate">👤 {r.employee_name}</span>}
+                          {r.site_address && <span className="truncate">📍 {r.site_address}</span>}
+                          <span className="truncate">🕒 {start}</span>
+                          <span className="truncate">~ {end}</span>
+                        </div>
                       </div>
-                    </td>
+                      <StatusBadge status={r.status} />
+                    </div>
+
+                    <div className="mt-2 flex items-center justify-end gap-1">
+                      <Link className="btn h-7 px-2 text-[11px]" href={`/schedules/${r.id}/edit`}>
+                        수정
+                      </Link>
+                      <button className="btn h-7 px-2 text-[11px]" onClick={() => onDelete(r.id, r)}>
+                        삭제
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 🖥️ 데스크탑: 테이블 (⚠️ colgroup 제거, 폭은 th/td에 직접 지정) */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-sm table-fixed">
+                <thead>
+                  <tr className="border-b bg-sky-50/50">
+                    <th className="p-2 text-left w-[220px]">제목</th>
+                    <th className="p-2 text-left w-[240px]">현장주소</th>
+                    <th className="p-2 text-left w-[240px]">담당</th>
+                    <th className="p-2 text-left w-[170px]">시작</th>
+                    <th className="p-2 text-left w-[170px]">종료</th>
+                    <th className="p-2 text-right w-[140px]">일당</th>
+                    <th className="p-2 text-left w-[120px]">상태</th>
+                    <th className="p-2 text-left w-[140px]">액션</th>
                   </tr>
-                ))}
-                {rows.length === 0 && (
-                  <tr>
-                    <td className="p-2 text-sm text-slate-500" colSpan={8}>
-                      데이터가 없습니다. {isElevated ? '필터를 조정하거나 “+ 새 일정”으로 추가해보세요.' : '관리자/매니저에게 일정을 배정받거나 “+ 새 일정”으로 본인 일정을 추가해보세요.'}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-              <tfoot>
-                <tr className="border-t bg-slate-50">
-                  <td className="p-2 font-semibold" colSpan={5}>합계</td>
-                  <td className="p-2 font-extrabold text-right whitespace-nowrap">
-                    ₩{rows.reduce((s, r) => s + (Number(r.daily_wage) || 0), 0).toLocaleString()}
-                  </td>
-                  <td className="p-2" colSpan={2} />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.id} className="border-b last:border-0">
+                      <td className="p-2 truncate w-[220px]">{r.title}</td>
+                      <td className="p-2 truncate w-[240px]">{r.site_address}</td>
+                      <td className="p-2 truncate w-[240px]">{r.employee_name || '-'}</td>
+                      <td className="p-2 w-[170px]">{fmtLocal(r.start_ts)}</td>
+                      <td className="p-2 w-[170px]">{fmtLocal(r.end_ts)}</td>
+                      <td className="p-2 text-right w-[140px]">{Number(r.daily_wage || 0).toLocaleString('ko-KR')}</td>
+                      <td className="p-2 w-[120px]">{STATUS_LABEL[r.status]}</td>
+                      <td className="p-2 w-[140px]">
+                        <div className="flex flex-wrap gap-2">
+                          <Link className="btn h-8 px-3 text-xs" href={`/schedules/${r.id}/edit`}>수정</Link>
+                          <button className="btn h-8 px-3 text-xs" onClick={() => onDelete(r.id, r)}>삭제</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="text-right text-xs text-slate-500 mt-2">
+                총 인건비 합계: {rows.reduce((a,c)=>a+Number(c.daily_wage||0),0).toLocaleString('ko-KR')}원
+              </div>
+            </div>
+          </>
         )}
       </section>
     </div>
   );
 }
 
-/* ------- 보조 컴포넌트 ------- */
+/* ====== 보조 컴포넌트 ====== */
 function StatusBadge({ status }: { status: Row['status'] }) {
-  const map: Record<Row['status'], { label: string; cls: string }> = {
-    scheduled: { label: STATUS_LABEL.scheduled, cls: 'bg-sky-50 text-sky-700 border-sky-200' },
-    in_progress: { label: STATUS_LABEL.in_progress, cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-    done: { label: STATUS_LABEL.done, cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-    cancelled: { label: STATUS_LABEL.cancelled, cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+  const map: Record<Row['status'], string> = {
+    scheduled: 'bg-sky-100 text-sky-700',
+    in_progress: 'bg-amber-100 text-amber-700',
+    done: 'bg-emerald-100 text-emerald-700',
+    cancelled: 'bg-slate-100 text-slate-600',
   };
-  const it = map[status] ?? map.scheduled;
   return (
-    <span className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-semibold ${it.cls}`}>
-      {it.label}
+    <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${map[status]}`}>
+      {STATUS_LABEL[status]}
     </span>
   );
 }

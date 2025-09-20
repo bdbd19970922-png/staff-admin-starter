@@ -435,7 +435,7 @@ export default function Page() {
     const usagesPayload = validLines.map((v) => ({
       material_id: v.material_id,
       location_id: v.location_id,
-      qty: v.qty,
+      qty: Number(v.qty),
       used_date,
       schedule_id: newScheduleId,
     }));
@@ -459,6 +459,7 @@ export default function Page() {
     const empNames = (form.empNames ?? []).map(s => s.trim()).filter(Boolean);
     const legacyEmpName = empNames.join(', ');
 
+    // ✅ 주소 연동: site_address + location(레거시) 동시 저장
     const fullPayload: Record<string, any> = {
       title: (form.title.trim() || (form.offDay ? '휴무' : '(제목없음)')),
       start_ts: startISO,
@@ -466,6 +467,7 @@ export default function Page() {
       customer_name: form.customerName.trim() || null,
       customer_phone: form.customerPhone.trim() || null,
       site_address: form.siteAddress.trim() || null,
+      location: form.siteAddress.trim() || null, // ← 추가: 레거시 컬럼 동기화
       revenue: num(form.total),
       material_cost: num(form.material),
       daily_wage: num(form.wage),
@@ -489,7 +491,7 @@ export default function Page() {
     let newScheduleId: string | null = null;
     let ins1 = await supabase.from('schedules').insert(fullPayload).select('id').single();
     if (ins1.error) {
-      const safeKeys = ['title','start_ts','end_ts','employee_name','customer_name','customer_phone','site_address'];
+      const safeKeys = ['title','start_ts','end_ts','employee_name','customer_name','customer_phone','site_address','location'];
       const safePayload: Record<string, any> = {};
       for (const k of safeKeys) safePayload[k] = fullPayload[k];
       const ins2 = await supabase.from('schedules').insert(safePayload).select('id').single();
@@ -583,16 +585,35 @@ export default function Page() {
         {loading ? (
           <div className="p-6 text-sm text-slate-600">불러오는 중…</div>
         ) : (
-          <MonthGrid
-            days={days}
-            baseDate={baseDate}
-            onAdd={openAddForDate}
-            onView={openViewById}
-            onDayClick={openDayDetail}
-            isAdmin={isAdmin}
-            isManager={isManager}
-            hasFinanceCols={hasFinanceCols}
-          />
+          <>
+            {/* 📱 모바일: Agenda 리스트(가독성 ↑) */}
+            <div className="sm:hidden">
+              <MonthAgendaMobile
+                days={days}
+                baseDate={baseDate}
+                onAdd={openAddForDate}
+                onView={openViewById}
+                onDayClick={openDayDetail}
+                isAdmin={isAdmin}
+                isManager={isManager}
+                hasFinanceCols={hasFinanceCols}
+              />
+            </div>
+
+            {/* 🖥️ 데스크탑: 기존 그리드 그대로 */}
+            <div className="hidden sm:block">
+              <MonthGrid
+                days={days}
+                baseDate={baseDate}
+                onAdd={openAddForDate}
+                onView={openViewById}
+                onDayClick={openDayDetail}
+                isAdmin={isAdmin}
+                isManager={isManager}
+                hasFinanceCols={hasFinanceCols}
+              />
+            </div>
+          </>
         )}
       </section>
 
@@ -906,6 +927,7 @@ function DetailModal({
     const empNames = (edit.empNames ?? []).map(s => s.trim()).filter(Boolean);
     const legacyEmpName = empNames.join(', ');
 
+    // ✅ 주소 연동: site_address + location(레거시) 동시 업데이트
     const fullPayload: Record<string, any> = {
       title: edit.title.trim() || (edit.offDay ? '휴무' : '(제목없음)'),
       start_ts: startISO,
@@ -913,6 +935,7 @@ function DetailModal({
       customer_name: edit.customerName.trim() || null,
       customer_phone: edit.customerPhone.trim() || null,
       site_address: edit.siteAddress.trim() || null,
+      location: edit.siteAddress.trim() || null, // ← 추가: 레거시 컬럼 동기화
     };
 
     if (isAdmin) {
@@ -940,7 +963,7 @@ function DetailModal({
     let { error } = await supabase.from('schedules').update(fullPayload).eq('id', row.id);
     if (error) {
       // 최소 컬럼으로 재시도
-      const safeKeys = ['title','start_ts','end_ts','employee_name','customer_name','customer_phone','site_address'];
+      const safeKeys = ['title','start_ts','end_ts','employee_name','customer_name','customer_phone','site_address','location'];
       const safePayload: Record<string, any> = {};
       for (const k of safeKeys) safePayload[k] = fullPayload[k];
       const retry = await supabase.from('schedules').update(safePayload).eq('id', row.id);
@@ -1025,7 +1048,7 @@ function DetailModal({
 
         {!editing ? (
           <>
-            {/* === 상세 보기 (기존 내용 그대로 옮겨두세요) === */}
+            {/* === 상세 보기 === */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Info label="작업내용" value={row.title || (effectiveOff(row) ? '휴무' : '(제목없음)')} />
               <Info label="직원" value={effectiveNames(row).join(', ') || '-'} />
@@ -1055,7 +1078,7 @@ function DetailModal({
           </>
         ) : (
           <>
-            {/* === 수정 폼 (기존 내용 그대로 옮겨두세요) === */}
+            {/* === 수정 폼 === */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <EditField label="작업내용">
                 <input className="input" value={edit.title} onChange={e => setEdit(s => ({ ...s, title: e.target.value }))} />
@@ -1299,7 +1322,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-/* ---------- 달력 그리드 ---------- */
+/* ---------- 달력 그리드 (데스크탑) ---------- */
 function MonthGrid({
   days, baseDate, onAdd, onView, onDayClick, isAdmin, isManager, hasFinanceCols,
 }: {
@@ -1379,6 +1402,87 @@ function MonthGrid({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/* ---------- 모바일 Agenda 리스트(가독성↑) ---------- */
+function MonthAgendaMobile({
+  days, baseDate, onAdd, onView, onDayClick, isAdmin, isManager, hasFinanceCols,
+}: {
+  days: DayCell[]; baseDate: Date;
+  onAdd: (d: Date) => void;
+  onView: (id: number) => void;
+  onDayClick: (d: Date) => void;
+  isAdmin: boolean;
+  isManager: boolean;
+  hasFinanceCols: boolean | null;
+}) {
+  // 이번 달 날짜만 추림
+  const inMonth = days.filter(d => isSameMonth(d.date, baseDate));
+
+  const week = ['일','월','화','수','목','금','토'];
+
+  return (
+    <div className="divide-y">
+      {inMonth.map(({ date, items }) => {
+        const today = isSameDay(date, new Date());
+        return (
+          <div key={date.toISOString()}>
+            {/* 날짜 헤더 */}
+            <div className="flex items-center justify-between px-3 py-2 bg-sky-50/60">
+              <button
+                onClick={() => onDayClick(new Date(date))}
+                className="text-sm font-semibold text-slate-800"
+                title="이 날짜 일정 전체 보기"
+              >
+                {fmt(date, 'M월 d일')} <span className="text-slate-500">({week[date.getDay()]})</span>
+              </button>
+              <div className="flex items-center gap-2">
+                {today && <span className="text-[10px] px-1 rounded border border-sky-200 bg-sky-50 text-sky-800">오늘</span>}
+                <button
+                  onClick={() => onAdd(new Date(date))}
+                  className="text-[11px] px-2 h-7 rounded border border-slate-200 hover:bg-slate-50"
+                  title="이 날짜에 일정 추가"
+                >
+                  + 추가
+                </button>
+              </div>
+            </div>
+
+            {/* 일정 리스트 */}
+            {items.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-slate-400">일정 없음</div>
+            ) : (
+              <ul className="px-2 py-1 space-y-1">
+                {items.map((r) => (
+                  <li key={r.id}>
+                    <button
+                      onClick={() => onView(r.id)}
+                      className={`w-full text-left rounded border px-2 py-1 text-[12px] hover:bg-slate-50 ${
+                        r.isOff ? 'border-rose-400' : 'border-slate-200'
+                      } relative`}
+                      title={r.emp ? `${r.title}\n(${r.emp})` : r.title}
+                    >
+                      {r.isTeam && <span className="absolute left-0 top-0 h-full w-0.5 bg-sky-500 rounded-l" />}
+                      <div className="truncate font-medium text-slate-800">{r.title}</div>
+                      <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-slate-600">
+                        {r.emp && <span className="truncate">👤 {r.emp}</span>}
+                        {r.isOff && <span className="text-rose-600 font-semibold">⛔ 휴무</span>}
+                        {(isAdmin || isManager) && (
+                          <span className="text-amber-700">
+                            {r.netText ?? (hasFinanceCols === false ? '순익 -' : '')}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
