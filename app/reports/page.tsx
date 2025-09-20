@@ -7,7 +7,7 @@ import {
   format, startOfMonth, endOfMonth, isAfter, isBefore, addDays,
 } from 'date-fns';
 
-/* ===== 세션 준비 대기(Unauthorized 예방) ===== */
+// ===== 세션 준비 대기(Unauthorized 예방) =====
 async function waitForAuthReady(maxTries = 6, delayMs = 300) {
   for (let i = 0; i < maxTries; i++) {
     const { data, error } = await supabase.auth.getSession();
@@ -19,17 +19,16 @@ async function waitForAuthReady(maxTries = 6, delayMs = 300) {
   return data?.session ?? null;
 }
 
-/* ===== 타입 ===== */
 type Row = {
   id: number;
   work_date?: string | null;
   employee_id?: string | null;
   employee_name?: string | null;
   revenue?: number | null;
-  material_cost_visible?: number | null; // ← 마스킹 반영된 컬럼만 사용
+  material_cost_visible?: number | null;
   daily_wage?: number | null;
   extra_cost?: number | null;
-  net_profit_visible?: number | null;     // ← 관리자만 값, 비관리자 null
+  net_profit_visible?: number | null;
 };
 
 type GroupedRow = {
@@ -48,7 +47,6 @@ type Grouped = { rows: GroupedRow[]; total: GroupedRow };
 type Mode = 'daily' | 'monthly' | 'employee';
 type Metric = 'revenue' | 'net' | 'daily_wage';
 
-/* ===== 페이지 ===== */
 export default function ReportsPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
@@ -58,23 +56,19 @@ export default function ReportsPage() {
   const [isManager, setIsManager] = useState(false);
   const isElevated = isAdmin || isManager;
 
-  // 현재 사용자
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
 
-  // 보기/그래프 옵션
   const [mode, setMode] = useState<Mode>('daily');
   const [metric, setMetric] = useState<Metric>('revenue');
   const [curved, setCurved] = useState(true);
 
-  // 날짜(기본: 이번 달)
   const [dateFrom, setDateFrom] = useState<string>(() => toDateInputValue(startOfMonth(new Date())));
   const [dateTo, setDateTo] = useState<string>(() => toDateInputValue(endOfMonth(new Date())));
 
-  // 직원별 보기 필터
   const [empNameFilter, setEmpNameFilter] = useState<string>('all');
 
-  /* ===== 권한/사용자명 로드 ===== */
+  // ===== 권한/사용자명 로드 =====
   useEffect(() => {
     (async () => {
       await waitForAuthReady();
@@ -92,7 +86,6 @@ export default function ReportsPage() {
       let admin = (!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email));
       let manager = false;
 
-      // 이름/권한: 존재하는 컬럼만 사용
       let name: string | null = null;
       if (uid) {
         const { data: prof } = await supabase
@@ -120,7 +113,7 @@ export default function ReportsPage() {
     })();
   }, []);
 
-  /* ===== 데이터 로드(보안 뷰 우선, 실패 시 schedules_secure 폴백) ===== */
+  // ===== 데이터 로드 (보안 뷰) =====
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -153,7 +146,7 @@ export default function ReportsPage() {
     })();
   }, []);
 
-  /* ===== 권한 기반 1차 필터: 관리자/매니저 전사, 직원 본인만 ===== */
+  // 권한 기반 1차 필터
   const rowsForUser = useMemo(() => {
     if (isElevated) return rows;
     const uid = (userId ?? '').trim();
@@ -166,7 +159,7 @@ export default function ReportsPage() {
     });
   }, [rows, isElevated, userId, userName]);
 
-  /* ===== 날짜 2차 필터 ===== */
+  // 날짜 2차 필터
   const filteredByDate = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
@@ -178,34 +171,34 @@ export default function ReportsPage() {
     });
   }, [rowsForUser, dateFrom, dateTo]);
 
-  /* ===== 직원 옵션 ===== */
+  // 직원 옵션
   const employeeNameOptions = useMemo(() => {
     const set = new Set<string>();
     for (const r of filteredByDate) set.add(((r.employee_name ?? '').trim()) || '(미지정)');
     return ['전체', ...Array.from(set).sort((a,b)=>a.localeCompare(b,'ko'))];
   }, [filteredByDate]);
 
-  /* ===== 직원별 보기 추가 필터 ===== */
+  // 직원별 보기 추가 필터
   const filteredForBranding = useMemo(() => {
     if (mode !== 'employee' || empNameFilter === 'all') return filteredByDate;
     const target = empNameFilter;
     return filteredByDate.filter(r => (((r.employee_name ?? '').trim()) || '(미지정)').toLowerCase() === target);
   }, [filteredByDate, mode, empNameFilter]);
 
-  /* ===== 그룹핑(표) ===== */
+  // 그룹핑(표)
   const grouped: Grouped = useMemo(() => {
     if (mode === 'employee') return groupByEmployee(filteredForBranding);
     if (mode === 'monthly')  return groupByMonth(filteredByDate);
     return groupByDay(filteredByDate);
   }, [filteredForBranding, filteredByDate, mode]);
 
-  /* ===== 지표(비관리자 net 금지) ===== */
+  // 비관리자 net 금지
   const metricSafe: Metric = useMemo(
     () => (!isAdmin && metric === 'net') ? 'revenue' : metric,
     [isAdmin, metric]
   );
 
-  /* ===== 그래프 데이터(일자 X축) ===== */
+  // 그래프 데이터(일자 X축)
   const chartDaily = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
@@ -243,7 +236,7 @@ export default function ReportsPage() {
     return { labels, values };
   }, [filteredByDate, dateFrom, dateTo, metricSafe, mode, empNameFilter, isAdmin]);
 
-  /* ===== 급여 반영(관리자 전용) ===== */
+  // 급여 반영(관리자 전용)
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const canSyncPayroll = isAdmin && mode === 'employee';
 
@@ -412,155 +405,152 @@ export default function ReportsPage() {
     }
   };
 
-  /* ===== 렌더 ===== */
   return (
-    <div className="p-4 space-y-4">
-      <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
-        <span className="bg-gradient-to-r from-sky-700 via-sky-600 to-indigo-600 bg-clip-text text-transparent">
-          📊 리포트
-        </span>
-      </h1>
+    <div>
+      <div className="p-4 space-y-4">
+        <h1 className="text-2xl font-extrabold">
+          <span className="title-gradient">📊 리포트</span>
+        </h1>
 
-      {/* 컨트롤 바 */}
-      <div className="card p-3">
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 w-full md:w-auto">
-            <label className="flex flex-col">
-              <span className="text-xs text-gray-600">보기</span>
-              <select
-                className="select min-h-[var(--tap-size)] w-full"
-                value={mode}
-                onChange={e => setMode(e.target.value as Mode)}
-              >
-                <option value="daily">일별</option>
-                <option value="monthly">월별</option>
-                <option value="employee">직원별</option>
-              </select>
-            </label>
-
-            {mode === 'employee' && (
-              <label className="flex flex-col col-span-2 sm:col-span-1">
-                <span className="text-xs text-gray-600">직원</span>
+        {/* 컨트롤 바 */}
+        <div className="card p-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-col">
+                <label className="text-xs text-gray-600">보기</label>
                 <select
-                  className="select min-h-[var(--tap-size)] w-full"
-                  value={empNameFilter}
-                  onChange={e => setEmpNameFilter(e.target.value)}
+                  className="select min-w-[140px]"
+                  value={mode}
+                  onChange={e => { setMode(e.target.value as Mode); }}
                 >
-                  <option value="all">전체</option>
-                  {employeeNameOptions.slice(1).map(name => (
-                    <option key={name} value={name.toLowerCase()}>{name}</option>
-                  ))}
+                  <option value="daily">일별</option>
+                  <option value="monthly">월별</option>
+                  <option value="employee">직원별</option>
                 </select>
+              </div>
+
+              {mode === 'employee' && (
+                <div className="flex flex-col">
+                  <label className="text-xs text-gray-600">직원 선택</label>
+                  <select
+                    className="select min-w-[160px]"
+                    value={empNameFilter}
+                    onChange={e => setEmpNameFilter(e.target.value)}
+                  >
+                    <option value="all">전체</option>
+                    {employeeNameOptions.slice(1).map(name => (
+                      <option key={name} value={name.toLowerCase()}>{name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="flex flex-col">
+                <label className="text-xs text-gray-600">지표</label>
+                <select
+                  className="select min-w-[140px]"
+                  value={(!isAdmin && metric === 'net') ? 'revenue' : metric}
+                  onChange={e => setMetric(e.target.value as Metric)}
+                >
+                  <option value="revenue">매출</option>
+                  <option value="daily_wage">인건비</option>
+                  {isAdmin && <option value="net">순수익</option>}
+                </select>
+              </div>
+
+              <label className="mt-1.5 inline-flex items-center gap-2 text-sm">
+                <input
+                  id="curved"
+                  type="checkbox"
+                  className="h-4 w-4 accent-sky-500"
+                  checked={curved}
+                  onChange={e => setCurved(e.target.checked)}
+                />
+                곡선 그래프
               </label>
+
+              <div className="flex items-end gap-2">
+                <div className="flex flex-col">
+                  <label className="text-xs text-gray-600">시작</label>
+                  <input
+                    type="date"
+                    className="input min-w-[150px]"
+                    value={dateFrom}
+                    onChange={e => setDateFrom(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col">
+                  <label className="text-xs text-gray-600">종료</label>
+                  <input
+                    type="date"
+                    className="input min-w-[150px]"
+                    value={dateTo}
+                    onChange={e => setDateTo(e.target.value)}
+                  />
+                </div>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setDateFrom(toDateInputValue(startOfMonth(new Date())));
+                    setDateTo(toDateInputValue(endOfMonth(new Date())));
+                  }}
+                >
+                  이번 달
+                </button>
+              </div>
+            </div>
+
+            {isAdmin && mode === 'employee' && (
+              <div className="flex items-end">
+                <button className="btn btn-primary" onClick={syncPayrolls}>
+                  직원별 인건비 → 급여 반영
+                </button>
+              </div>
             )}
-
-            <label className="flex flex-col">
-              <span className="text-xs text-gray-600">지표</span>
-              <select
-                className="select min-h-[var(--tap-size)] w-full"
-                value={(!isAdmin && metric === 'net') ? 'revenue' : metric}
-                onChange={e => setMetric(e.target.value as Metric)}
-              >
-                <option value="revenue">매출</option>
-                <option value="daily_wage">인건비</option>
-                {isAdmin && <option value="net">순수익</option>}
-              </select>
-            </label>
-
-            <label className="flex items-center gap-2 text-sm mt-5 sm:mt-6">
-              <input
-                id="curved"
-                type="checkbox"
-                className="h-4 w-4 accent-sky-500"
-                checked={curved}
-                onChange={e => setCurved(e.target.checked)}
-              />
-              곡선 그래프
-            </label>
-
-            <label className="flex flex-col">
-              <span className="text-xs text-gray-600">시작</span>
-              <input
-                type="date"
-                className="input min-h-[var(--tap-size)] w-full"
-                value={dateFrom}
-                onChange={e => setDateFrom(e.target.value)}
-              />
-            </label>
-
-            <label className="flex flex-col">
-              <span className="text-xs text-gray-600">종료</span>
-              <input
-                type="date"
-                className="input min-h-[var(--tap-size)] w-full"
-                value={dateTo}
-                onChange={e => setDateTo(e.target.value)}
-              />
-            </label>
-
-            <div className="col-span-2 sm:col-span-1">
-              <button
-                className="btn min-h-[var(--tap-size)] w-full"
-                onClick={() => {
-                  setDateFrom(toDateInputValue(startOfMonth(new Date())));
-                  setDateTo(toDateInputValue(endOfMonth(new Date())));
-                }}
-              >
-                이번 달
-              </button>
-            </div>
           </div>
+        </div>
 
-          {isAdmin && mode === 'employee' && (
-            <div className="flex items-end">
-              <button
-                className="btn btn-primary min-h-[var(--tap-size)]"
-                onClick={syncPayrolls}
-                title="직원별 인건비 합계를 급여 테이블로 반영"
-              >
-                직원별 인건비 → 급여 반영
-              </button>
-            </div>
+        {/* 동기화/에러 메시지 */}
+        {syncMsg && (
+          <div className="rounded-xl border border-sky-200 bg-sky-50 p-2 text-sm text-sky-800">
+            {syncMsg}
+          </div>
+        )}
+        {msg && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-2 text-sm text-red-700">
+            {msg}
+          </div>
+        )}
+
+        {/* 그래프 — 잘림 방지: 스크롤 래퍼(-mx 보정) */}
+        <div className="card p-0">
+          <div className="-mx-4 px-4 md:mx-0 md:px-0" style={{ overflowX: 'auto', overflowY: 'visible' }}>
+            {loading ? (
+              <div className="p-3 text-sm text-gray-600">그래프 준비 중…</div>
+            ) : chartDaily.labels.length === 0 ? (
+              <div className="p-3 text-sm text-gray-500">표시할 데이터가 없습니다.</div>
+            ) : (
+              <div className="p-3">
+                <LineChart labels={chartDaily.labels} values={chartDaily.values} curved={curved} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 표 */}
+        <div className="card p-3">
+          {loading ? (
+            <div className="text-sm text-gray-600">불러오는 중…</div>
+          ) : (
+            <TableReport mode={mode} data={grouped} isAdmin={isAdmin} />
           )}
         </div>
-      </div>
-
-      {/* 안내/에러 */}
-      {syncMsg && (
-        <div className="rounded-xl border border-sky-200 bg-sky-50 p-2 text-sm text-sky-800">
-          {syncMsg}
-        </div>
-      )}
-      {msg && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-sm text-rose-700">
-          {msg}
-        </div>
-      )}
-
-      {/* 그래프 */}
-      <div className="card p-3">
-        {loading ? (
-          <div className="text-sm text-gray-600">그래프 준비 중…</div>
-        ) : chartDaily.labels.length === 0 ? (
-          <div className="text-sm text-gray-500">표시할 데이터가 없습니다.</div>
-        ) : (
-          <LineChart labels={chartDaily.labels} values={chartDaily.values} curved={curved} />
-        )}
-      </div>
-
-      {/* 표 */}
-      <div className="card p-3">
-        {loading ? (
-          <div className="text-sm text-gray-600">불러오는 중…</div>
-        ) : (
-          <TableReport mode={mode} data={grouped} isAdmin={isAdmin} />
-        )}
       </div>
     </div>
   );
 }
 
-/* ===== 표 컴포넌트 ===== */
+/* =================== 표 컴포넌트 =================== */
 function TableReport({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdmin: boolean; }) {
   const baseHeaders = mode === 'employee'
     ? ['직원', '건수', '매출', '자재비', '인건비', '기타비용']
@@ -568,43 +558,43 @@ function TableReport({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdm
 
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-[760px] w-full text-sm">
-        <thead className="bg-sky-50/60 border-b border-sky-100">
+      <table className="min-w-[760px] w-full border border-sky-100">
+        <thead className="bg-sky-50">
           <tr>
             {baseHeaders.map(h => (
-              <th key={h} className="px-2 py-2 text-left font-semibold text-sky-900">{h}</th>
+              <th key={h} className="border border-sky-100 px-2 py-1 text-left text-sm">{h}</th>
             ))}
-            <th className="px-2 py-2 text-left font-semibold text-sky-900">순수익</th>
+            <th className="border border-sky-100 px-2 py-1 text-left text-sm">순수익</th>
           </tr>
         </thead>
         <tbody>
           {data.rows.map(r => {
             const net = computeNetGrouped(r);
             return (
-              <tr key={r.key} className="border-b border-slate-100 hover:bg-slate-50/60">
-                <td className="px-2 py-2">{r.label}</td>
-                <td className="px-2 py-2">{r.count}</td>
-                <td className="px-2 py-2">{fmtMoney(r.revenue)}</td>
-                <td className="px-2 py-2">{isAdmin ? fmtMoney(r.material_cost_visible) : '***'}</td>
-                <td className="px-2 py-2">{fmtMoney(r.daily_wage)}</td>
-                <td className="px-2 py-2">{fmtMoney(r.extra_cost)}</td>
-                <td className="px-2 py-2">{isAdmin ? fmtMoney(net) : '***'}</td>
+              <tr key={r.key} className="hover:bg-sky-50/50">
+                <td className="border border-sky-100 px-2 py-1 text-sm">{r.label}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm">{r.count}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.revenue)}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm">{isAdmin ? fmtMoney(r.material_cost_visible) : '***'}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.daily_wage)}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.extra_cost)}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm">{isAdmin ? fmtMoney(net) : '***'}</td>
               </tr>
             );
           })}
         </tbody>
-        <tfoot className="bg-sky-50/40 border-t border-sky-100">
+        <tfoot className="bg-sky-50">
           {(() => {
             const totalNet = computeNetGrouped(data.total);
             return (
               <tr>
-                <td className="px-2 py-2 font-semibold">합계</td>
-                <td className="px-2 py-2 font-semibold">{data.total.count}</td>
-                <td className="px-2 py-2 font-semibold">{fmtMoney(data.total.revenue)}</td>
-                <td className="px-2 py-2 font-semibold">{isAdmin ? fmtMoney(data.total.material_cost_visible) : '***'}</td>
-                <td className="px-2 py-2 font-semibold">{fmtMoney(data.total.daily_wage)}</td>
-                <td className="px-2 py-2 font-semibold">{fmtMoney(data.total.extra_cost)}</td>
-                <td className="px-2 py-2 font-semibold">{isAdmin ? fmtMoney(totalNet) : '***'}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">합계</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{data.total.count}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.revenue)}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{isAdmin ? fmtMoney(data.total.material_cost_visible) : '***'}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.daily_wage)}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.extra_cost)}</td>
+                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{isAdmin ? fmtMoney(totalNet) : '***'}</td>
               </tr>
             );
           })()}
@@ -614,11 +604,12 @@ function TableReport({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdm
   );
 }
 
-/* ===== 라인 차트(SVG, 가로 스크롤 허용) ===== */
+/* =================== 라인 차트(SVG) =================== */
 function LineChart({ labels, values, curved }: { labels: string[]; values: number[]; curved: boolean }) {
   const w = Math.max(320, Math.min(1040, labels.length * 64));
   const h = 280;
-  const pad = { l: 48, r: 12, t: 18, b: 40 };
+  // 🔧 잘림 방지용 여백 확장
+  const pad = { l: 56, r: 24, t: 18, b: 48 };
 
   const minV = Math.min(...values);
   const maxV = Math.max(...values);
@@ -641,7 +632,13 @@ function LineChart({ labels, values, curved }: { labels: string[]; values: numbe
 
   return (
     <div className="overflow-x-auto">
-      <svg width={w} height={h}>
+      <svg
+        width={w}
+        height={h}
+        viewBox={`0 0 ${w} ${h}`}
+        preserveAspectRatio="xMinYMin meet"
+        style={{ display: 'block' }}
+      >
         <line x1={pad.l} y1={h - pad.b} x2={w - pad.r} y2={h - pad.b} stroke="#ddd" />
         <line x1={pad.l} y1={pad.t} x2={pad.l} y2={h - pad.b} stroke="#ddd" />
 
@@ -660,14 +657,16 @@ function LineChart({ labels, values, curved }: { labels: string[]; values: numbe
           if (!show) return null;
           const x = pad.l + (i * (w - pad.l - pad.r)) / Math.max(1, labels.length - 1);
           return (
-            <text key={i} x={x} y={h - pad.b + 14} fontSize="10" textAnchor="middle">
+            <text key={i} x={x} y={h - pad.b + 16} fontSize="10" textAnchor="middle">
               {lab}
             </text>
           );
         })}
 
         <path d={path} fill="none" stroke="black" strokeWidth={2} />
-        {points.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={2} fill="black" />)}
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={2} fill="black" />
+        ))}
       </svg>
     </div>
   );
@@ -691,7 +690,7 @@ function buildSmoothPath(pts: {x:number;y:number}[]) {
   return d.join(' ');
 }
 
-/* ===== 그룹핑/유틸 ===== */
+/* =================== 그룹핑/유틸 =================== */
 function groupByDay(rows: Row[]): Grouped { return group(rows, (d) => format(d, 'yyyy-MM-dd')); }
 function groupByMonth(rows: Row[]): Grouped { return group(rows, (d) => format(d, 'yyyy-MM')); }
 
@@ -782,6 +781,7 @@ function sumGroups(acc: GroupedRow, r: GroupedRow): GroupedRow {
     extra_cost: acc.extra_cost + r.extra_cost,
   };
 }
+
 function computeNetGrouped(x: {revenue:number; material_cost_visible:number; daily_wage:number; extra_cost:number}) {
   return num(x.revenue) - num(x.material_cost_visible) - num(x.daily_wage) - num(x.extra_cost);
 }
@@ -807,7 +807,6 @@ function toDateInputValue(d: Date) {
 function toYYYYMM(s?: string | null) { return s ? s.slice(0, 7) : ''; }
 function normalizeName(n?: string | null) { return ((n ?? '').trim().toLowerCase()) || ''; }
 
-/** schedules 전체에서 같은 이름의 employee_id가 "정확히 1개"면 그 ID 반환 */
 async function resolveEmployeeIdByName(name: string): Promise<string | null> {
   const trimmed = (name ?? '').trim();
   if (!trimmed) return null;
