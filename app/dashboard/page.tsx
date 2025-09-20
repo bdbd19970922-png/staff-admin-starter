@@ -1,4 +1,4 @@
-// FILE: /app/dashboard/page.tsx
+// FILE: app/dashboard/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -8,7 +8,6 @@ import { startOfMonth, endOfMonth, formatISO } from 'date-fns';
 
 type Stat = { label: string; value: string | number; href?: string; note?: string };
 
-/** 세션이 실제로 준비될 때까지 잠깐 대기 (401/Unauthorized 예방) */
 async function waitForAuthReady(maxTries = 6, delayMs = 300) {
   for (let i = 0; i < maxTries; i++) {
     const { data, error } = await supabase.auth.getSession();
@@ -16,7 +15,6 @@ async function waitForAuthReady(maxTries = 6, delayMs = 300) {
     if (!error && hasToken) return data.session!;
     await new Promise((r) => setTimeout(r, delayMs));
   }
-  // 마지막에도 없으면 그대로 진행(익명 요청은 어차피 RLS에서 걸림)
   const { data } = await supabase.auth.getSession();
   return data?.session ?? null;
 }
@@ -27,27 +25,22 @@ export default function Page() {
     { label: '오늘 일정', value: '-', href: '/schedules' },
     { label: '이번 달 총 매출', value: '-', href: '/reports', note: '리포트 기준' },
     { label: '미지급 급여(건수)', value: '-', href: '/payrolls' },
-    // 직원은 지출 카드를 숨깁니다 (아래에서 조건부로만 추가)
   ]);
 
-  // 사용자 / 권한
   const [uid, setUid] = useState<string | null>(null);
-  const [fullName, setFullName] = useState<string>(''); // 항상 profiles.full_name 우선
+  const [fullName, setFullName] = useState<string>('');
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [isManager, setIsManager] = useState<boolean>(false);
-  const isElevated = isAdmin || isManager; // 관리자 or 매니저
+  const isElevated = isAdmin || isManager;
   const [hello, setHello] = useState<string>('');
 
-  // 1) 내 정보/권한 확정 + 인사말 (항상 full_name)
   useEffect(() => {
     (async () => {
-      // ✅ 세션 토큰 준비될 때까지 잠깐 대기 (Unauthorized 방지)
       const session = await waitForAuthReady();
       const _uid = session?.user?.id ?? null;
       const email = (session?.user?.email ?? '').toLowerCase();
       setUid(_uid);
 
-      // (기존 호환) 환경변수 기반 관리자
       const parseList = (env?: string) =>
         (env ?? '').split(',').map(s => s.trim()).filter(Boolean);
       const adminIds = parseList(process.env.NEXT_PUBLIC_ADMIN_IDS);
@@ -56,7 +49,6 @@ export default function Page() {
       let elevatedAdmin = (!!_uid && adminIds.includes(_uid)) || (!!email && adminEmails.includes(email));
       let elevatedManager = false;
 
-      // 프로필 조회(권한 + 이름)
       let nameFromProfile = '';
       if (_uid) {
         const { data: me } = await supabase
@@ -70,7 +62,6 @@ export default function Page() {
         if (me?.is_manager) elevatedManager = true;
       }
 
-      // 이름은 full_name 우선, 없으면 이메일 아이디
       const resolvedName =
         nameFromProfile ||
         (session?.user?.email ? session.user.email.split('@')[0] : '');
@@ -78,39 +69,32 @@ export default function Page() {
       setFullName(resolvedName);
       setIsAdmin(!!elevatedAdmin);
       setIsManager(!!elevatedManager);
-
-      // 상단 인사 (항상 가입한 이름 기준)
       setHello(resolvedName ? `${resolvedName} 님 환영합니다!` : '환영합니다!');
     })();
   }, []);
 
-  // 2) 통계 집계 (권한/이름 확정 후 동작)
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        // ✅ 세션 토큰 준비될 때까지 잠깐 대기 (Unauthorized 방지)
         await waitForAuthReady();
 
         const now = new Date();
-        const todayStr   = formatISO(now, { representation: 'date' }); // YYYY-MM-DD
+        const todayStr   = formatISO(now, { representation: 'date' });
         const monthStart = formatISO(startOfMonth(now));
         const monthEnd   = formatISO(endOfMonth(now));
 
-        // 직원 전용 필터(내 스케줄만): employee_id 또는 이름 포함
         const buildOwnerOr = (meUid: string | null, meName: string) => {
-          const nameEnc = (meName ?? '').replace(/([{}%,])/g, ''); // 단순 이스케이프
+          const nameEnc = (meName ?? '').replace(/([{}%,])/g, '');
           const parts: string[] = [];
           if (meUid) parts.push(`employee_id.eq.${meUid}`);
           if (nameEnc) {
             parts.push(`employee_names.cs.{${nameEnc}}`);
             parts.push(`employee_name.ilike.%${nameEnc}%`);
           }
-          // 최소 1개는 넣어야 하므로, 없으면 절대 매치 안 되는 토큰 추가
           return parts.length ? parts.join(',') : 'id.eq.-1';
         };
 
-        // 1) 오늘 일정 개수
         const todayCountPromise = (async () => {
           let q = supabase
             .from('schedules_secure')
@@ -122,7 +106,6 @@ export default function Page() {
           return typeof count === 'number' ? count : 0;
         })();
 
-        // 2) 이번 달 총 매출
         const monthRevenuePromise = (async () => {
           let q = supabase
             .from('schedules_secure')
@@ -137,7 +120,6 @@ export default function Page() {
           return fmtKRW(rev);
         })();
 
-        // 3) 미지급 급여(건수) — 읽기는 보안뷰 사용
         const unpaidCountPromise = (async () => {
           const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
           let q = supabase
@@ -150,12 +132,10 @@ export default function Page() {
           return typeof count === 'number' ? count : 0;
         })();
 
-        // 4) 이번 달 지출(자재+경비) — 관리자만
         const monthSpendingPromise = (async () => {
-          if (!isAdmin) return null; // 매니저는 민감값 마스킹 정책에 맞춰 숨김
+          if (!isAdmin) return null;
           let sum = 0;
 
-          // 스케줄에서 자재/경비
           {
             const { data } = await supabase
               .from('schedules_secure')
@@ -168,7 +148,6 @@ export default function Page() {
             }
           }
 
-          // 일반 경비 테이블
           {
             const { data, error } = await supabase
               .from('expenses')
@@ -205,28 +184,15 @@ export default function Page() {
   }, [isElevated, isAdmin, fullName, uid]);
 
   return (
-    <div
-      className="
-        min-h-screen text-slate-900
-        from-slate-50 to-sky-50
-        bg-[radial-gradient(900px_500px_at_10%_-10%,rgba(56,189,248,0.18),transparent),
-            radial-gradient(800px_400px_at_90%_-5%,rgba(99,102,241,0.12),transparent),
-            linear-gradient(to_bottom,var(--tw-gradient-stops))]
-      "
-    >
-      {/* 상단 헤더 */}
+    <div className="min-h-screen text-slate-900 bg-[radial-gradient(900px_500px_at_10%_-10%,rgba(56,189,248,0.18),transparent),radial-gradient(800px_400px_at_90%_-5%,rgba(99,102,241,0.12),transparent),linear-gradient(to_bottom,var(--tw-gradient-stops))] from-slate-50 to-sky-50">
       <header className="sticky top-0 z-10 border-b border-sky-100/60 bg-white/75 backdrop-blur">
-        <div className="app-container py-5">
+        <div className="app-container py-4 md:py-6">
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
             <span className="bg-gradient-to-r from-sky-700 via-sky-600 to-indigo-600 bg-clip-text text-transparent">
               대시보드
             </span>
           </h1>
-          <p className="text-slate-600 mt-1 font-medium">
-            {hello}
-          </p>
-
-          {/* 일반직원 모드 안내 + 개인화 멘트 */}
+          <p className="text-slate-600 mt-1 font-medium">{hello}</p>
           {!isElevated && (
             <p className="text-slate-500 text-sm mt-0.5">
               {fullName ? `${fullName} 님, 오늘도 안전 최우선! 항상 노고에 감사드립니다 🙏` : '오늘도 안전 최우선! 항상 노고에 감사드립니다 🙏'}
@@ -236,15 +202,13 @@ export default function Page() {
       </header>
 
       <main className="app-container space-y-7 py-6">
-        {/* 빠른 이동 */}
-        <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
           <QuickLink href="/schedules" label="스케줄" />
           <QuickLink href="/calendar" label="캘린더" />
           <QuickLink href="/payrolls" label="급여" />
           <QuickLink href="/reports" label="리포트" />
         </section>
 
-        {/* KPI 카드 */}
         <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           {stats.map((s, i) => (
             <StatCard key={i} {...s} loading={loading} />
@@ -255,22 +219,20 @@ export default function Page() {
   );
 }
 
-/* ---------- QuickLink ---------- */
 function QuickLink({ href, label }: { href: string; label: string }) {
   return (
     <Link href={href} className="group block">
-      <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/60 bg-white/90 px-5 py-4 shadow-sm hover:shadow-md hover:bg-sky-50/60 transition flex items-center justify-between">
-        <span className="font-bold tracking-tight text-slate-900">{label}</span>
+      <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/60 bg-white/90 px-5 py-4 min-h-[var(--tap-size)] shadow-sm hover:shadow-md hover:bg-sky-50/60 transition flex items-center justify-between">
+        <span className="font-bold tracking-tight text-slate-900 text-base sm:text-lg">{label}</span>
         <span className="font-extrabold text-sky-500 group-hover:translate-x-0.5 transition">→</span>
       </div>
     </Link>
   );
 }
 
-/* ---------- StatCard ---------- */
 function StatCard({ label, value, note, href, loading }: Stat & { loading: boolean }) {
   const Panel = ({ children }: { children: React.ReactNode }) => (
-    <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-gradient-to-br from-white to-sky-50/60 p-5 shadow-[0_6px_16px_rgba(2,132,199,0.08)] hover:shadow-[0_10px_22px_rgba(2,132,199,0.12)] transition h-full">
+    <div className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-gradient-to-br from-white to-sky-50/60 p-5 shadow-[0_6px_16px_rgba(2,132,199,0.08)] hover:shadow-[0_10px_22px_rgba(2,132,199,0.12)] transition h-full min-h-[120px]">
       {children}
     </div>
   );
@@ -278,7 +240,7 @@ function StatCard({ label, value, note, href, loading }: Stat & { loading: boole
   const Content = (
     <Panel>
       <div className="text-[12px] font-semibold text-sky-700/80">{label}</div>
-      <div className={`mt-2 text-3xl md:text-4xl font-extrabold tracking-tight ${loading ? 'animate-pulse text-slate-300' : 'text-slate-900'}`}>
+      <div className={`mt-2 text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight ${loading ? 'animate-pulse text-slate-300' : 'text-slate-900'}`}>
         {loading ? '88,888' : value}
       </div>
       {note ? <div className="text-[11px] text-slate-500 mt-3 font-medium">{note}</div> : null}
@@ -294,7 +256,6 @@ function StatCard({ label, value, note, href, loading }: Stat & { loading: boole
   );
 }
 
-/* -------- 유틸 -------- */
 function toNum(v: any): number {
   const x = Number(v ?? 0);
   return Number.isFinite(x) ? x : 0;

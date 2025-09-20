@@ -1,4 +1,4 @@
-// FILE: /app/layout.tsx
+// FILE: app/layout.tsx
 import './globals.css';
 import type { ReactNode } from 'react';
 import dynamic from 'next/dynamic';
@@ -19,7 +19,6 @@ const nunito = Nunito({
 });
 
 const notoSansKR = Noto_Sans_KR({
-  // 프로젝트 설정에 맞춰 'latin' 유지 (필요 시 'korean'으로 변경 가능)
   subsets: ['latin'],
   weight: ['400', '700'],
   variable: '--font-kor',
@@ -45,7 +44,12 @@ const AppShellNoSSR = dynamic(() => import('@/components/AppShell'), {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="ko">
-      <body className={`${nunito.variable} ${notoSansKR.variable}`}>
+      <head>
+        {/* 📱 모바일 뷰포트 필수 */}
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+      </head>
+      {/* 본문 색상/배경은 globals.css에서 지정되므로, 여기선 가독성만 보강 */}
+      <body className={`${nunito.variable} ${notoSansKR.variable} antialiased`}>
         <ErrorBoundary>
           {/* 기존 AppShell 그대로, 단 CSR 전용으로 동작 */}
           <AppShellNoSSR>{children}</AppShellNoSSR>

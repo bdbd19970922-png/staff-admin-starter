@@ -145,34 +145,38 @@ export default function AuthBar() {
   if (!mounted) {
     return (
       <div className="sticky top-0 z-10 w-full border-b bg-white">
-        <div className="mx-auto flex max-w-screen-xl items-center justify-between px-4 py-2">
-          <div className="text-sm font-semibold">집수리 관리</div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-gray-600">확인 중…</span>
-            <div className="h-7 w-16 rounded border border-gray-200 bg-gray-50" />
+        <div className="mx-auto max-w-screen-xl px-3 sm:px-4">
+          <div className="flex flex-col gap-2 py-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm font-semibold">집수리 관리</div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-600">확인 중…</span>
+              <div className="h-7 w-16 rounded border border-gray-200 bg-gray-50" />
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  // 마운트 후 실제 UI
+  // 마운트 후 실제 UI (모바일: 세로 정렬 → sm부터 가로 정렬)
   return (
     <div className="sticky top-0 z-10 w-full border-b bg-white">
-      <div className="mx-auto flex max-w-screen-xl items-center justify-between px-4 py-2">
-        <div className="text-sm font-semibold">집수리 관리</div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-600">
-            {loading ? '확인 중…' : (email ?? '비로그인')}
-          </span>
-          {email ? (
-            <button
-              className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
-              onClick={onLogout}
-            >
-              로그아웃
-            </button>
-          ) : null}
+      <div className="mx-auto max-w-screen-xl px-3 sm:px-4">
+        <div className="flex flex-col gap-2 py-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm font-semibold">집수리 관리</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-gray-600">
+              {loading ? '확인 중…' : (email ?? '비로그인')}
+            </span>
+            {email ? (
+              <button
+                className="rounded border px-2 py-1 text-xs hover:bg-gray-50 min-h-[var(--tap-size)]"
+                onClick={onLogout}
+              >
+                로그아웃
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

@@ -132,3 +132,26 @@ body {
     @apply bg-background text-foreground;
   }
 }
+
+/* ====== (추가) Mobile Baseline Utilities ================================= */
+
+/* 손가락 터치 최소 높이 */
+:root { --tap-size: 44px; }
+button, a, input, select { min-height: var(--tap-size); }
+
+/* iOS 안전영역 패딩 보정 */
+body {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* 이미지/미디어는 컨테이너 폭에 맞춤 */
+img, svg, video, canvas { max-width: 100%; height: auto; }
+
+/* 테이블 부모에 가로 스크롤 허용 (페이지에서 div.table-scroll 로 감싸기만 하면 됨) */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}

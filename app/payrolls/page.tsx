@@ -1,3 +1,4 @@
+// FILE: app/payrolls/page.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -638,7 +639,7 @@ export default function Page() {
               <label className="text-sm text-slate-600 w-20">지급일</label>
               <input
                 type="date"
-                className="input w-[170px]"
+                className="input w-[170px] py-1"
                 value={paidModal.date}
                 onChange={e => setPaidModal(s => ({ ...s, date: e.target.value }))}
               />

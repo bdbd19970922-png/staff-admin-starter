@@ -12,7 +12,7 @@ type ProfileRow = {
   full_name: string | null
   phone: string | null
   is_admin: boolean | null
-  is_manager: boolean | null   // ✅ 추가: 상단 공통 타입에도 반영
+  is_manager: boolean | null
 }
 
 type ScheduleRow = {
@@ -90,19 +90,21 @@ export default function AdminPage() {
   if (!isAdmin) return null
 
   return (
-    <div className="container">
+    <div className="container px-3 md:px-4">
       <div className="card" style={{ marginTop: 16 }}>
-        <h1>관리자</h1>
+        <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
+          <span className="bg-gradient-to-r from-sky-700 via-sky-600 to-indigo-600 bg-clip-text text-transparent">관리자</span>
+        </h1>
 
         {/* 탭 */}
-        <div className="row" style={{ gap: 8, marginTop: 8 }}>
-          <button className={`btn ${tab==='report'?'primary':'secondary'}`} onClick={()=>setTab('report')}>리포트</button>
-          <button className={`btn ${tab==='employees'?'primary':'secondary'}`} onClick={()=>setTab('employees')}>직원 관리</button>
-          <button className={`btn ${tab==='finance'?'primary':'secondary'}`} onClick={()=>setTab('finance')}>정산(수입/지출)</button>
+        <div className="row flex flex-wrap items-center gap-2 md:gap-3" style={{ marginTop: 8 }}>
+          <button className={`btn ${tab==='report'?'primary':'secondary'} min-h-[44px]`} onClick={()=>setTab('report')}>리포트</button>
+          <button className={`btn ${tab==='employees'?'primary':'secondary'} min-h-[44px]`} onClick={()=>setTab('employees')}>직원 관리</button>
+          <button className={`btn ${tab==='finance'?'primary':'secondary'} min-h-[44px]`} onClick={()=>setTab('finance')}>정산(수입/지출)</button>
         </div>
 
         {/* 콘텐츠 */}
-        <div style={{ marginTop: 12 }}>
+        <div className="mt-3">
           {tab === 'report' && <ReportSection />}
           {tab === 'employees' && <EmployeesSection />}
           {tab === 'finance' && <FinanceSection />}
@@ -114,19 +116,23 @@ export default function AdminPage() {
 
 /* ================= 공통 작은 컴포넌트 ================= */
 function LoadingCard() {
-  return <div className="container"><div className="card" style={{ marginTop: 16 }}>불러오는 중…</div></div>
+  return (
+    <div className="container px-3 md:px-4">
+      <div className="card" style={{ marginTop: 16 }}>불러오는 중…</div>
+    </div>
+  )
 }
 function GateCard({ gateInput, setGateInput, onEnter, gateMsg }:{
   gateInput:string; setGateInput:(v:string)=>void; onEnter:()=>void; gateMsg:string|null
 }) {
   return (
-    <div className="container">
-      <div className="card" style={{ marginTop: 16, maxWidth: 480 }}>
-        <h1>관리자 페이지</h1>
+    <div className="container px-3 md:px-4">
+      <div className="card" style={{ marginTop: 16, maxWidth: 520 }}>
+        <h1 className="text-2xl font-semibold">관리자 페이지</h1>
         <p className="muted">주소창으로 /admin 직접 접근 시에만 보입니다.</p>
-        <input className="input" placeholder="관리자 비밀번호" type="password" value={gateInput} onChange={e => setGateInput(e.target.value)} />
-        <div className="row" style={{ marginTop: 8 }}>
-          <button className="btn primary" onClick={onEnter}>입장</button>
+        <input className="input w-full" placeholder="관리자 비밀번호" type="password" value={gateInput} onChange={e => setGateInput(e.target.value)} />
+        <div className="row flex flex-wrap gap-2" style={{ marginTop: 8 }}>
+          <button className="btn primary min-h-[44px] w-full sm:w-auto" onClick={onEnter}>입장</button>
         </div>
         {gateMsg && <p className="muted" style={{ marginTop: 8 }}>{gateMsg}</p>}
         <p className="muted" style={{ marginTop: 8 }}>※ 실제 데이터 보호는 RLS(관리자 전용 정책)으로 수행됩니다.</p>
@@ -230,10 +236,10 @@ function EmployeesSection() {
       {/* 헤더/액션바 */}
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-lg font-semibold text-slate-800">직원 관리</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Input
             placeholder="이름/이메일/전화 검색"
-            className="w-64"
+            className="w-full sm:w-64"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -242,6 +248,7 @@ function EmployeesSection() {
             onClick={load}
             disabled={loading}
             title="새로고침"
+            className="min-h-[44px]"
           >
             새로고침
           </Button>
@@ -332,32 +339,32 @@ function EmployeesSection() {
                     <TableCell className="align-middle text-right space-x-2">
                       {isEditing ? (
                         <>
-                          <Button size="sm" onClick={onSave} className="bg-sky-600 hover:bg-sky-700">
+                          <Button size="sm" onClick={onSave} className="bg-sky-600 hover:bg-sky-700 min-h-[36px]">
                             저장
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => setEdit(null)}>
+                          <Button size="sm" variant="outline" onClick={() => setEdit(null)} className="min-h-[36px]">
                             취소
                           </Button>
                         </>
                       ) : (
-                        <>
-                          <Button size="sm" variant="outline" onClick={() => setEdit(r)}>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button size="sm" variant="outline" onClick={() => setEdit(r)} className="min-h-[36px]">
                             수정
                           </Button>
                           {/* ✅ 원클릭 매니저 부여/해제 */}
                           {r.is_manager ? (
-                            <Button size="sm" variant="secondary" onClick={() => revokeManager(r.id)}>
+                            <Button size="sm" variant="secondary" onClick={() => revokeManager(r.id)} className="min-h-[36px]">
                               매니저 해제
                             </Button>
                           ) : (
-                            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => grantManager(r.id)}>
+                            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 min-h-[36px]" onClick={() => grantManager(r.id)}>
                               매니저 부여
                             </Button>
                           )}
-                          <Button size="sm" variant="destructive" onClick={() => onDelete(r.id)}>
+                          <Button size="sm" variant="destructive" onClick={() => onDelete(r.id)} className="min-h-[36px]">
                             삭제
                           </Button>
-                        </>
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>
@@ -489,12 +496,12 @@ function FinanceSection() {
 
   return (
     <div className="card">
-      <h2>정산 항목 입력</h2>
+      <h2 className="text-lg font-semibold">정산 항목 입력</h2>
       {msg && <p className="muted">{msg}</p>}
 
       {/* ✨ 추가수익 계산 버튼 */}
-      <div className="row" style={{ gap: 8, marginBottom: 8 }}>
-        <button className="btn secondary" onClick={() => setOpenExtra(v => !v)}>
+      <div className="row flex flex-wrap gap-2 md:gap-3" style={{ marginBottom: 8 }}>
+        <button className="btn secondary min-h-[44px] w-full sm:w-auto" onClick={() => setOpenExtra(v => !v)}>
           {openExtra ? '추가수익 계산 닫기' : '추가수익 계산 입력'}
         </button>
       </div>
@@ -503,46 +510,46 @@ function FinanceSection() {
       {openExtra && (
         <div className="card" style={{ marginBottom: 12 }}>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <div>
+            <div className="min-w-[140px]">
               <label className="muted">날짜</label>
               <input
                 type="date"
-                className="input"
+                className="input min-h-[44px]"
                 value={extraForm.item_date}
                 onChange={e=>setExtraForm({...extraForm, item_date:e.target.value})}
               />
             </div>
-            <div>
+            <div className="min-w-[140px]">
               <label className="muted">매출</label>
               <input
-                className="input" type="number"
+                className="input min-h-[44px]" type="number"
                 value={extraForm.revenue}
                 onChange={e=>setExtraForm({...extraForm, revenue:Number(e.target.value)})}
                 placeholder="0"
               />
             </div>
-            <div>
+            <div className="min-w-[140px]">
               <label className="muted">인건비</label>
               <input
-                className="input" type="number"
+                className="input min-h-[44px]" type="number"
                 value={extraForm.wage}
                 onChange={e=>setExtraForm({...extraForm, wage:Number(e.target.value)})}
                 placeholder="0"
               />
             </div>
-            <div>
+            <div className="min-w-[140px]">
               <label className="muted">그외비용</label>
               <input
-                className="input" type="number"
+                className="input min-h-[44px]" type="number"
                 value={extraForm.other}
                 onChange={e=>setExtraForm({...extraForm, other:Number(e.target.value)})}
                 placeholder="0"
               />
             </div>
-            <div>
+            <div className="min-w-[220px]">
               <label className="muted">직원이름(선택)</label>
               <input
-                className="input"
+                className="input min-h-[44px]"
                 value={extraForm.employee_name ?? ''}
                 onChange={e=>setExtraForm({...extraForm, employee_name: e.target.value || null})}
                 placeholder="자유 입력 (가입 여부 무관)"
@@ -551,7 +558,7 @@ function FinanceSection() {
             <div style={{ flex: 1, minWidth: 240 }}>
               <label className="muted">메모(선택)</label>
               <input
-                className="input"
+                className="input min-h-[44px]"
                 value={extraForm.label}
                 onChange={e=>setExtraForm({...extraForm, label:e.target.value})}
                 placeholder="예) A고객 추가수익 정산"
@@ -563,21 +570,21 @@ function FinanceSection() {
             <div className="muted">순수익 = 매출 - 인건비 - 그외비용</div>
             <div><b>{money(extraNet)}</b></div>
             <div style={{ marginLeft: 'auto' }}>
-              <button className="btn primary" onClick={saveExtraIncome}>추가수익으로 저장</button>
+              <button className="btn primary min-h-[44px]" onClick={saveExtraIncome}>추가수익으로 저장</button>
             </div>
           </div>
         </div>
       )}
 
       {/* 기존 일반 입력 폼 */}
-      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-        <div>
+      <div className="row flex flex-wrap gap-2 md:gap-3">
+        <div className="min-w-[140px]">
           <label className="muted">날짜</label>
-          <input type="date" className="input" value={form.item_date ?? ''} onChange={e=>setForm({...form, item_date:e.target.value})}/>
+          <input type="date" className="input min-h-[44px]" value={form.item_date ?? ''} onChange={e=>setForm({...form, item_date:e.target.value})}/>
         </div>
-        <div>
+        <div className="min-w-[160px]">
           <label className="muted">분류</label>
-          <select className="input" value={form.category ?? 'revenue'} onChange={e=>setForm({...form, category: e.target.value as any})}>
+          <select className="input min-h-[44px]" value={form.category ?? 'revenue'} onChange={e=>setForm({...form, category: e.target.value as any})}>
             <option value="revenue">매출</option>
             <option value="material_cost">자재비</option>
             <option value="daily_wage">인건비</option>
@@ -586,32 +593,32 @@ function FinanceSection() {
             <option value="extra_expense">추가지출</option>
           </select>
         </div>
-        <div>
+        <div className="min-w-[200px] flex-1">
           <label className="muted">메모</label>
-          <input className="input" value={form.label ?? ''} onChange={e=>setForm({...form, label:e.target.value})} placeholder="설명(선택)"/>
+          <input className="input min-h-[44px]" value={form.label ?? ''} onChange={e=>setForm({...form, label:e.target.value})} placeholder="설명(선택)"/>
         </div>
-        <div>
+        <div className="min-w-[140px]">
           <label className="muted">금액</label>
-          <input className="input" type="number" value={form.amount ?? 0} onChange={e=>setForm({...form, amount:Number(e.target.value)})}/>
+          <input className="input min-h-[44px]" type="number" value={form.amount ?? 0} onChange={e=>setForm({...form, amount:Number(e.target.value)})}/>
         </div>
-        <div>
+        <div className="min-w-[200px] flex-1">
           <label className="muted">직원이름(선택)</label>
           <input
-            className="input"
+            className="input min-h-[44px]"
             value={form.employee_name ?? ''}
             onChange={e=>setForm({...form, employee_name:e.target.value})}
             placeholder="자유 입력 (가입 여부 무관)"
           />
         </div>
-        <div style={{ alignSelf:'end' }}>
-          <button className="btn primary" onClick={onSubmit}>{editId ? '수정' : '추가'}</button>{' '}
-          {editId && <button className="btn" onClick={resetForm}>취소</button>}
+        <div className="min-w-[160px] self-end">
+          <button className="btn primary min-h-[44px] w-full sm:w-auto" onClick={onSubmit}>{editId ? '수정' : '추가'}</button>{' '}
+          {editId && <button className="btn min-h-[44px] w-full sm:w-auto mt-2 sm:mt-0" onClick={resetForm}>취소</button>}
         </div>
       </div>
 
       {/* 목록 */}
       <div style={{ overflowX:'auto', marginTop: 12 }}>
-        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+        <table style={{ width:'100%', borderCollapse:'collapse', minWidth: 760 }}>
           <thead>
             <tr style={{ borderBottom:'1px solid #e5e7eb' }}>
               <th style={{ textAlign:'left', padding:6 }}>날짜</th>
@@ -625,7 +632,7 @@ function FinanceSection() {
           <tbody>
             {list.sort((a,b)=> (a.item_date > b.item_date?1:-1) ).map(r=>(
               <tr key={r.id} style={{ borderBottom:'1px solid #f2f2f2' }}>
-                <td style={{ padding:6 }}>{r.item_date}</td>
+                <td style={{ padding:6, whiteSpace:'nowrap' }}>{r.item_date}</td>
                 <td style={{ padding:6 }}>{categoryLabel(r.category)}</td>
                 <td style={{ padding:6 }}>{r.label ?? ''}</td>
                 <td style={{ padding:6, textAlign:'right' }}>{money(r.amount)}</td>
@@ -635,8 +642,10 @@ function FinanceSection() {
                     : (r.employee_id ? <span className="muted">{r.employee_id}</span> : '')}
                 </td>
                 <td style={{ padding:6, textAlign:'right' }}>
-                  <button className="btn secondary" onClick={()=>onEdit(r)}>수정</button>{' '}
-                  <button className="btn" onClick={()=>onDelete(r.id)}>삭제</button>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button className="btn secondary min-h-[36px]" onClick={()=>onEdit(r)}>수정</button>
+                    <button className="btn min-h-[36px]" onClick={()=>onDelete(r.id)}>삭제</button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -806,18 +815,23 @@ function ReportSection() {
 
   return (
     <div>
-      <h2>리포트</h2>
+      <h2 className="text-lg font-semibold">리포트</h2>
       {msg && <p className="muted">{msg}</p>}
-      <div className="row" style={{ gap: 12, alignItems: 'flex-end', marginTop: 6 }}>
+      <div className="row flex flex-wrap items-end gap-2 md:gap-3" style={{ marginTop: 6 }}>
         <div>
           <label className="muted">시작</label>
-          <input type="date" className="input" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
+          <input type="date" className="input min-h-[44px]" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
         </div>
         <div>
           <label className="muted">종료</label>
-          <input type="date" className="input" value={dateTo} onChange={e=>setDateTo(e.target.value)} />
+          <input type="date" className="input min-h-[44px]" value={dateTo} onChange={e=>setDateTo(e.target.value)} />
         </div>
-        <button className="btn secondary" onClick={()=>{ setDateFrom(toDateInputValue(startOfMonth(new Date()))); setDateTo(toDateInputValue(endOfMonth(new Date()))) }}>이번 달</button>
+        <button
+          className="btn secondary min-h-[44px] w-full sm:w-auto"
+          onClick={()=>{ setDateFrom(toDateInputValue(startOfMonth(new Date()))); setDateTo(toDateInputValue(endOfMonth(new Date()))) }}
+        >
+          이번 달
+        </button>
       </div>
 
       {/* 체크박스 */}
@@ -845,13 +859,13 @@ function ReportSection() {
       </div>
 
       {/* 그래프 */}
-      <div className="card" style={{ marginTop: 12 }}>
+      <div className="card overflow-x-auto" style={{ marginTop: 12 }}>
         <LineChart labels={labels} values={values} />
       </div>
 
       {/* 표 요약 */}
-      <div className="card" style={{ marginTop: 12 }}>
-        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+      <div className="card overflow-x-auto" style={{ marginTop: 12 }}>
+        <table style={{ width:'100%', borderCollapse:'collapse', minWidth: 520 }}>
           <thead>
             <tr style={{ borderBottom:'1px solid #e5e7eb' }}>
               <th style={{ textAlign:'left', padding:6 }}>지표</th>

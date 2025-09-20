@@ -270,7 +270,7 @@ export default function Page() {
         .order('full_name', { ascending: true })
         .returns<ProfileName[]>();
 
-      if (!error && data) {
+    if (!error && data) {
         const names = data
           .map(p => (p.full_name ?? '').trim())
           .filter(Boolean);

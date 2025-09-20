@@ -7,7 +7,7 @@ import {
   format, startOfMonth, endOfMonth, isAfter, isBefore, addDays,
 } from 'date-fns';
 
-// ===== 세션 준비 대기(Unauthorized 예방) =====
+/* ===== 세션 준비 대기(Unauthorized 예방) ===== */
 async function waitForAuthReady(maxTries = 6, delayMs = 300) {
   for (let i = 0; i < maxTries; i++) {
     const { data, error } = await supabase.auth.getSession();
@@ -19,17 +19,17 @@ async function waitForAuthReady(maxTries = 6, delayMs = 300) {
   return data?.session ?? null;
 }
 
+/* ===== 타입 ===== */
 type Row = {
   id: number;
-  // reports_secure 기준
-  work_date?: string | null;                 // ← 뷰에서 date(s.start_ts)
+  work_date?: string | null;
   employee_id?: string | null;
   employee_name?: string | null;
   revenue?: number | null;
-  material_cost_visible?: number | null;     // ← 항상 이 컬럼만 사용(마스킹 반영됨)
+  material_cost_visible?: number | null; // ← 마스킹 반영된 컬럼만 사용
   daily_wage?: number | null;
   extra_cost?: number | null;
-  net_profit_visible?: number | null;        // ← 관리자만 값, 비관리자 null
+  net_profit_visible?: number | null;     // ← 관리자만 값, 비관리자 null
 };
 
 type GroupedRow = {
@@ -37,20 +37,18 @@ type GroupedRow = {
   label: string;
   count: number;
   revenue: number;
-  material_cost_visible: number;             // ← visible 기준 합산
+  material_cost_visible: number;
   daily_wage: number;
   extra_cost: number;
   employee_id?: string | null;
   employee_name?: string | null;
 };
-type Grouped = {
-  rows: GroupedRow[];
-  total: GroupedRow;
-};
+type Grouped = { rows: GroupedRow[]; total: GroupedRow };
 
 type Mode = 'daily' | 'monthly' | 'employee';
 type Metric = 'revenue' | 'net' | 'daily_wage';
 
+/* ===== 페이지 ===== */
 export default function ReportsPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
@@ -58,9 +56,9 @@ export default function ReportsPage() {
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [isManager, setIsManager] = useState(false);
-  const isElevated = isAdmin || isManager; // 관리자 or 매니저
+  const isElevated = isAdmin || isManager;
 
-  // 현재 로그인 사용자 정보(직원 모드에서 본인 필터에 사용)
+  // 현재 사용자
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
 
@@ -69,65 +67,60 @@ export default function ReportsPage() {
   const [metric, setMetric] = useState<Metric>('revenue');
   const [curved, setCurved] = useState(true);
 
-  // 날짜 범위 (기본: 이번 달)
+  // 날짜(기본: 이번 달)
   const [dateFrom, setDateFrom] = useState<string>(() => toDateInputValue(startOfMonth(new Date())));
   const [dateTo, setDateTo] = useState<string>(() => toDateInputValue(endOfMonth(new Date())));
 
-  // 직원별 보기에서 사용할 "직원 선택"
+  // 직원별 보기 필터
   const [empNameFilter, setEmpNameFilter] = useState<string>('all');
 
-  // ===== 권한/사용자명 로드 =====
-useEffect(() => {
-  (async () => {
-    await waitForAuthReady();
+  /* ===== 권한/사용자명 로드 ===== */
+  useEffect(() => {
+    (async () => {
+      await waitForAuthReady();
 
-    const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
-      .split(',').map(s => s.trim()).filter(Boolean);
-    const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
-      .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      const adminIds = (process.env.NEXT_PUBLIC_ADMIN_IDS ?? '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '')
+        .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-    const { data: { session } } = await supabase.auth.getSession();
-    const uid = session?.user?.id ?? '';
-    const email = (session?.user?.email ?? '').toLowerCase();
-    setUserId(uid || null);
+      const { data: { session } } = await supabase.auth.getSession();
+      const uid = session?.user?.id ?? '';
+      const email = (session?.user?.email ?? '').toLowerCase();
+      setUserId(uid || null);
 
-    // 환경변수 기반 관리자 우선
-    let admin = (!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email));
-    let manager = false;
+      let admin = (!!uid && adminIds.includes(uid)) || (!!email && adminEmails.includes(email));
+      let manager = false;
 
-    // ✅ 존재하는 컬럼만 사용 (display_name 금지)
-    let name: string | null = null;
-    if (uid) {
-      const { data: prof, error: profErr } = await supabase
-        .from('profiles')
-        .select('full_name, name, is_manager, is_admin')
-        .eq('id', uid)
-        .maybeSingle();
-
-      if (!profErr && prof) {
-        name = ((prof.full_name ?? prof.name ?? '') as string).trim() || null;
-        if (prof.is_manager) manager = true;
-        if (prof.is_admin)   admin = true; // DB 관리자도 인정
+      // 이름/권한: 존재하는 컬럼만 사용
+      let name: string | null = null;
+      if (uid) {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('full_name, name, is_manager, is_admin')
+          .eq('id', uid)
+          .maybeSingle();
+        if (prof) {
+          name = ((prof.full_name ?? prof.name ?? '') as string).trim() || null;
+          if (prof.is_manager) manager = true;
+          if (prof.is_admin)   admin = true;
+        }
       }
-    }
+      if (!name) {
+        const metaName =
+          (session?.user?.user_metadata?.name ??
+           session?.user?.user_metadata?.full_name ??
+           session?.user?.user_metadata?.user_name) as string | undefined;
+        name = (metaName || '').trim() || null;
+      }
 
-    // 메타데이터 폴백
-    if (!name) {
-      const metaName =
-        (session?.user?.user_metadata?.name ??
-         session?.user?.user_metadata?.full_name ??
-         session?.user?.user_metadata?.user_name) as string | undefined;
-      name = (metaName || '').trim() || null;
-    }
+      setUserName(name);
+      setIsManager(manager);
+      setIsAdmin(admin);
+    })();
+  }, []);
 
-    setUserName(name);
-    setIsManager(manager);
-    setIsAdmin(admin);
-  })();
-}, []);
-
-
-  // ===== 데이터 로드 (보안 뷰) =====
+  /* ===== 데이터 로드(보안 뷰 우선, 실패 시 schedules_secure 폴백) ===== */
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -137,7 +130,6 @@ useEffect(() => {
       const sel =
         'id,employee_id,employee_name,work_date,revenue,daily_wage,extra_cost,material_cost_visible,net_profit_visible';
 
-      // 기본: 리포트 보안뷰 사용
       let { data, error } = await supabase
         .from('reports_secure')
         .select(sel)
@@ -145,7 +137,6 @@ useEffect(() => {
         .returns<Row[]>();
 
       if (error) {
-        // 폴백: 최소 컬럼만 schedules_secure에서 읽기
         const sel2 =
           'id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost,net_profit_visible';
         const fb = await supabase
@@ -162,9 +153,7 @@ useEffect(() => {
     })();
   }, []);
 
-  // ✅ 권한 기반 1차 필터
-  //   - 관리자/매니저: 전사 데이터
-  //   - 직원: 본인 것만
+  /* ===== 권한 기반 1차 필터: 관리자/매니저 전사, 직원 본인만 ===== */
   const rowsForUser = useMemo(() => {
     if (isElevated) return rows;
     const uid = (userId ?? '').trim();
@@ -177,7 +166,7 @@ useEffect(() => {
     });
   }, [rows, isElevated, userId, userName]);
 
-  // 날짜로 2차 필터 (work_date 기준)
+  /* ===== 날짜 2차 필터 ===== */
   const filteredByDate = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
@@ -189,37 +178,34 @@ useEffect(() => {
     });
   }, [rowsForUser, dateFrom, dateTo]);
 
-  // 직원 이름 목록(날짜 필터 적용 후)
+  /* ===== 직원 옵션 ===== */
   const employeeNameOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const r of filteredByDate) {
-      const name = ((r.employee_name ?? '').trim()) || '(미지정)';
-      set.add(name);
-    }
+    for (const r of filteredByDate) set.add(((r.employee_name ?? '').trim()) || '(미지정)');
     return ['전체', ...Array.from(set).sort((a,b)=>a.localeCompare(b,'ko'))];
   }, [filteredByDate]);
 
-  // 직원별 모드에서 추가 직원 필터 적용
+  /* ===== 직원별 보기 추가 필터 ===== */
   const filteredForBranding = useMemo(() => {
     if (mode !== 'employee' || empNameFilter === 'all') return filteredByDate;
     const target = empNameFilter;
     return filteredByDate.filter(r => (((r.employee_name ?? '').trim()) || '(미지정)').toLowerCase() === target);
   }, [filteredByDate, mode, empNameFilter]);
 
-  // 테이블용 그룹핑
+  /* ===== 그룹핑(표) ===== */
   const grouped: Grouped = useMemo(() => {
     if (mode === 'employee') return groupByEmployee(filteredForBranding);
     if (mode === 'monthly')  return groupByMonth(filteredByDate);
     return groupByDay(filteredByDate);
   }, [filteredForBranding, filteredByDate, mode]);
 
-  // (중요) 비관리자는 net 선택 시 강제로 revenue로 대체(매니저도 마스킹)
+  /* ===== 지표(비관리자 net 금지) ===== */
   const metricSafe: Metric = useMemo(
     () => (!isAdmin && metric === 'net') ? 'revenue' : metric,
     [isAdmin, metric]
   );
 
-  // 그래프: 항상 "일자별 X축" (work_date 사용)
+  /* ===== 그래프 데이터(일자 X축) ===== */
   const chartDaily = useMemo(() => {
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
@@ -243,7 +229,7 @@ useEffect(() => {
         if (k !== key) continue;
 
         if (metricSafe === 'net') {
-          if (!isAdmin) continue; // 매니저/직원은 순수익 집계 제외
+          if (!isAdmin) continue;
           sum += num(r.net_profit_visible);
         } else if (metricSafe === 'revenue') {
           sum += num(r.revenue);
@@ -257,38 +243,27 @@ useEffect(() => {
     return { labels, values };
   }, [filteredByDate, dateFrom, dateTo, metricSafe, mode, empNameFilter, isAdmin]);
 
-  // 직원별 인건비 → 급여 테이블 반영(관리자만)
+  /* ===== 급여 반영(관리자 전용) ===== */
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const canSyncPayroll = isAdmin && mode === 'employee';
 
- // ======== 안전 UPSERT ========
-  /**
-   * 안전 반영
-   * - key = (employee_id, YYYY-MM)
-   * - 이미 paid=true면 건너뜀
-   * - 그 외는 upsert(onConflict: employee_id,pay_month)로 신규/갱신
-   * - employee_id가 없으면(이름만) 기존 방식(SELECT→UPDATE/INSERT) 유지
-   */
   async function safeUpsertPayroll(record: {
     employee_id: string | null;
     employee_name: string | null;
-    pay_month: string;        // 화면표시용(YYYY-MM 또는 범위)
+    pay_month: string;
     period_start: string;
     period_end: string;
     amount: number | null;
     total_pay: number | null;
     memo: string | null;
   }) {
-    // 1) 키 월(YYYY-MM) 확정 (TEXT 컬럼이므로 'YYYY-MM'로 고정)
     const keyMonth =
       toYYYYMM(record.pay_month) ||
       toYYYYMM(record.period_start) ||
       toYYYYMM(record.period_end);
     if (!keyMonth) throw new Error('pay_month 계산 실패');
 
-    // 2) employee_id가 있으면: paid 여부만 조회 → paid면 스킵, 아니면 upsert
     if (record.employee_id) {
-      // 2-1) 기존 paid 여부 조회
       const { data: ex, error: exErr } = await supabase
         .from('payrolls')
         .select('id, paid')
@@ -297,42 +272,30 @@ useEffect(() => {
         .maybeSingle();
       if (exErr && exErr.code !== 'PGRST116') throw exErr;
 
-      if (ex?.paid === true) {
-        // 지급완료는 보호
-        return { action: 'skip_paid' as const };
-      }
+      if (ex?.paid === true) return { action: 'skip_paid' as const };
 
-      // 2-2) 미지급 또는 없음 → upsert (유니크: employee_id,pay_month)
       const payload = {
         employee_id: record.employee_id,
         employee_name: record.employee_name,
-        pay_month: keyMonth,          // TEXT 'YYYY-MM'
+        pay_month: keyMonth,
         period_start: record.period_start,
         period_end: record.period_end,
         amount: record.amount ?? null,
         total_pay: record.total_pay ?? record.amount ?? null,
-        paid: ex?.paid ?? false,      // 기존이 있으면 그대로 유지(보통 false)
-        paid_at: ex?.paid ? (new Date()).toISOString().slice(0,10) : null, // paid면 유지, 아니면 null
+        paid: ex?.paid ?? false,
+        paid_at: ex?.paid ? (new Date()).toISOString().slice(0,10) : null,
         memo: record.memo ?? null,
       };
 
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('payrolls')
-        .upsert([payload], {
-          onConflict: 'employee_id,pay_month',
-          ignoreDuplicates: false,
-          defaultToNull: false,
-        })
+        .upsert([payload], { onConflict: 'employee_id,pay_month', ignoreDuplicates: false, defaultToNull: false })
         .select('id');
 
       if (error) throw error;
-
-      // 갱신/신규 구분은 응답으로는 애매하므로 기존 유무로 판단
       return { action: ex ? ('update' as const) : ('insert' as const) };
     }
 
-    // 3) employee_id가 없는 경우(이름만 있는 케이스):
-    //    유니크 제약을 쓸 수 없으니, 기존 SELECT → (paid면 스킵, 아니면 UPDATE) → 없으면 INSERT
     let existing: { id: string; paid: boolean } | null = null;
     let q = supabase
       .from('payrolls')
@@ -346,9 +309,7 @@ useEffect(() => {
     existing = (ex2 as any) ?? null;
 
     if (existing) {
-      if (existing.paid === true) {
-        return { action: 'skip_paid' as const };
-      }
+      if (existing.paid === true) return { action: 'skip_paid' as const };
       const { error: upErr } = await supabase
         .from('payrolls')
         .update({
@@ -378,36 +339,12 @@ useEffect(() => {
       if (insErr) throw insErr;
       return { action: 'insert' as const };
     }
-
-
-    // 3-3) 없으면 INSERT
-    const payload = {
-      employee_id: record.employee_id,
-      employee_name: record.employee_name,
-      pay_month: keyMonth,        // TEXT 컬럼 → 'YYYY-MM'로 저장
-      period_start: record.period_start,
-      period_end: record.period_end,
-      amount: record.amount ?? null,
-      total_pay: record.total_pay ?? record.amount ?? null,
-      paid: false,
-      paid_at: null,
-      memo: record.memo ?? null,
-    };
-    const { error: insErr } = await supabase.from('payrolls').insert(payload);
-    if (insErr) throw insErr;
-    return { action: 'insert' as const };
   }
 
-  /**
-   * 버튼 클릭 핸들러
-   * - 직원별로 합산 → 이름→ID 매칭 → 중복 키(직원/월)로 dedup → safeUpsert 반복
-   * - 완료 메시지: 신규/갱신/건너뜀(지급완료)
-   */
   const syncPayrolls = async () => {
     if (!canSyncPayroll) return;
     setSyncMsg(null);
 
-    // 1) 기간 유효성
     const s = parseDateInput(dateFrom);
     const e = parseDateInput(dateTo);
     if (s == null || e == null) {
@@ -417,10 +354,8 @@ useEffect(() => {
     const sameMonth = s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth();
     const payMonthDisplay = sameMonth ? format(s, 'yyyy-MM') : `${dateFrom}~${dateTo}`;
 
-    // 2) 직원별 집계
     const byEmp = groupByEmployee(filteredByDate);
 
-    // 3) 이름→ID 해석(스케줄에서 단일 ID면 채택)
     const needResolve = byEmp.rows.filter(r => !r.employee_id).map(r => r.label);
     const resolvedMap = new Map<string, string>();
     await Promise.all(
@@ -430,7 +365,6 @@ useEffect(() => {
       })
     );
 
-    // 4) 레코드 초안
     const raw = byEmp.rows.map(r => {
       const id = r.employee_id ?? resolvedMap.get(r.label) ?? null;
       const name = (r.employee_name ?? r.label ?? '').trim();
@@ -449,7 +383,6 @@ useEffect(() => {
       };
     });
 
-    // 5) 키(ID|월 or name|월)로 합산/중복제거
     const dedup = new Map<string, typeof raw[number]>();
     for (const r of raw) {
       const key =
@@ -464,7 +397,6 @@ useEffect(() => {
     }
     const records = Array.from(dedup.values());
 
-    // 6) 안전 반영 루프
     try {
       let inserted = 0, updated = 0, skippedPaid = 0;
       for (const r of records) {
@@ -479,223 +411,200 @@ useEffect(() => {
       setSyncMsg(`⚠️ 급여 반영 실패: ${err?.message ?? '알 수 없는 오류'}`);
     }
   };
-// ======== 안전 UPSERT 끝 ========
 
-
-
+  /* ===== 렌더 ===== */
   return (
-    <div>
-      <div className="p-4 space-y-4">
-        <h1 className="text-2xl font-extrabold">
-          <span className="title-gradient">📊 리포트</span>
-        </h1>
+    <div className="p-4 space-y-4">
+      <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
+        <span className="bg-gradient-to-r from-sky-700 via-sky-600 to-indigo-600 bg-clip-text text-transparent">
+          📊 리포트
+        </span>
+      </h1>
 
-        {/* 컨트롤 바 */}
-        <div className="card p-3">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex flex-col">
-                <label className="text-xs text-gray-600">보기</label>
+      {/* 컨트롤 바 */}
+      <div className="card p-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 w-full md:w-auto">
+            <label className="flex flex-col">
+              <span className="text-xs text-gray-600">보기</span>
+              <select
+                className="select min-h-[var(--tap-size)] w-full"
+                value={mode}
+                onChange={e => setMode(e.target.value as Mode)}
+              >
+                <option value="daily">일별</option>
+                <option value="monthly">월별</option>
+                <option value="employee">직원별</option>
+              </select>
+            </label>
+
+            {mode === 'employee' && (
+              <label className="flex flex-col col-span-2 sm:col-span-1">
+                <span className="text-xs text-gray-600">직원</span>
                 <select
-                  className="select min-w-[140px]"
-                  value={mode}
-                  onChange={e => { setMode(e.target.value as Mode); }}
+                  className="select min-h-[var(--tap-size)] w-full"
+                  value={empNameFilter}
+                  onChange={e => setEmpNameFilter(e.target.value)}
                 >
-                  <option value="daily">일별</option>
-                  <option value="monthly">월별</option>
-                  <option value="employee">직원별</option>
+                  <option value="all">전체</option>
+                  {employeeNameOptions.slice(1).map(name => (
+                    <option key={name} value={name.toLowerCase()}>{name}</option>
+                  ))}
                 </select>
-              </div>
-
-              {/* 직원별 모드에서만 노출: 직원 선택 */}
-              {mode === 'employee' && (
-                <div className="flex flex-col">
-                  <label className="text-xs text-gray-600">직원 선택</label>
-                  <select
-                    className="select min-w-[160px]"
-                    value={empNameFilter}
-                    onChange={e => setEmpNameFilter(e.target.value)}
-                  >
-                    <option value="all">전체</option>
-                    {employeeNameOptions.slice(1).map(name => (
-                      <option key={name} value={name.toLowerCase()}>{name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div className="flex flex-col">
-                <label className="text-xs text-gray-600">지표</label>
-                <select
-                  className="select min-w-[140px]"
-                  value={(!isAdmin && metric === 'net') ? 'revenue' : metric}
-                  onChange={e => setMetric(e.target.value as Metric)}
-                >
-                  <option value="revenue">매출</option>
-                  <option value="daily_wage">인건비</option>
-                  {isAdmin && <option value="net">순수익</option>}
-                </select>
-              </div>
-
-              <label className="mt-1.5 inline-flex items-center gap-2 text-sm">
-                <input
-                  id="curved"
-                  type="checkbox"
-                  className="h-4 w-4 accent-sky-500"
-                  checked={curved}
-                  onChange={e => setCurved(e.target.checked)}
-                />
-                곡선 그래프
               </label>
-
-              <div className="flex items-end gap-2">
-                <div className="flex flex-col">
-                  <label className="text-xs text-gray-600">시작</label>
-                  <input
-                    type="date"
-                    className="input min-w-[150px]"
-                    value={dateFrom}
-                    onChange={e => setDateFrom(e.target.value)}
-                  />
-                </div>
-                <div className="flex flex-col">
-                  <label className="text-xs text-gray-600">종료</label>
-                  <input
-                    type="date"
-                    className="input min-w-[150px]"
-                    value={dateTo}
-                    onChange={e => setDateTo(e.target.value)}
-                  />
-                </div>
-                <button
-                  className="btn"
-                  onClick={() => {
-                    setDateFrom(toDateInputValue(startOfMonth(new Date())));
-                    setDateTo(toDateInputValue(endOfMonth(new Date())));
-                  }}
-                >
-                  이번 달
-                </button>
-              </div>
-            </div>
-
-            {isAdmin && mode === 'employee' && (
-              <div className="flex items-end">
-                <button
-                  className="btn btn-primary"
-                  onClick={syncPayrolls}
-                >
-                  직원별 인건비 → 급여 반영
-                </button>
-              </div>
             )}
-          </div>
-        </div>
 
-        {/* 동기화/에러 메시지 */}
-        {syncMsg && (
-          <div className="rounded-xl border border-sky-200 bg-sky-50 p-2 text-sm text-sky-800">
-            {syncMsg}
-          </div>
-        )}
-        {msg && (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-2 text-sm text-red-700">
-            {msg}
-          </div>
-        )}
+            <label className="flex flex-col">
+              <span className="text-xs text-gray-600">지표</span>
+              <select
+                className="select min-h-[var(--tap-size)] w-full"
+                value={(!isAdmin && metric === 'net') ? 'revenue' : metric}
+                onChange={e => setMetric(e.target.value as Metric)}
+              >
+                <option value="revenue">매출</option>
+                <option value="daily_wage">인건비</option>
+                {isAdmin && <option value="net">순수익</option>}
+              </select>
+            </label>
 
-        {/* 그래프 */}
-        <div className="card p-3">
-          {loading ? (
-            <div className="text-sm text-gray-600">그래프 준비 중…</div>
-          ) : chartDaily.labels.length === 0 ? (
-            <div className="text-sm text-gray-500">표시할 데이터가 없습니다.</div>
-          ) : (
-            <LineChart labels={chartDaily.labels} values={chartDaily.values} curved={curved} />
+            <label className="flex items-center gap-2 text-sm mt-5 sm:mt-6">
+              <input
+                id="curved"
+                type="checkbox"
+                className="h-4 w-4 accent-sky-500"
+                checked={curved}
+                onChange={e => setCurved(e.target.checked)}
+              />
+              곡선 그래프
+            </label>
+
+            <label className="flex flex-col">
+              <span className="text-xs text-gray-600">시작</span>
+              <input
+                type="date"
+                className="input min-h-[var(--tap-size)] w-full"
+                value={dateFrom}
+                onChange={e => setDateFrom(e.target.value)}
+              />
+            </label>
+
+            <label className="flex flex-col">
+              <span className="text-xs text-gray-600">종료</span>
+              <input
+                type="date"
+                className="input min-h-[var(--tap-size)] w-full"
+                value={dateTo}
+                onChange={e => setDateTo(e.target.value)}
+              />
+            </label>
+
+            <div className="col-span-2 sm:col-span-1">
+              <button
+                className="btn min-h-[var(--tap-size)] w-full"
+                onClick={() => {
+                  setDateFrom(toDateInputValue(startOfMonth(new Date())));
+                  setDateTo(toDateInputValue(endOfMonth(new Date())));
+                }}
+              >
+                이번 달
+              </button>
+            </div>
+          </div>
+
+          {isAdmin && mode === 'employee' && (
+            <div className="flex items-end">
+              <button
+                className="btn btn-primary min-h-[var(--tap-size)]"
+                onClick={syncPayrolls}
+                title="직원별 인건비 합계를 급여 테이블로 반영"
+              >
+                직원별 인건비 → 급여 반영
+              </button>
+            </div>
           )}
         </div>
+      </div>
 
-        {/* 표 */}
-        <div className="card p-3">
-          {loading ? (
-            <div className="text-sm text-gray-600">불러오는 중…</div>
-          ) : (
-            <TableReport
-              mode={mode}
-              data={grouped}
-              isAdmin={isAdmin}   // ← 관리자만 민감값 표시
-            />
-          )}
+      {/* 안내/에러 */}
+      {syncMsg && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 p-2 text-sm text-sky-800">
+          {syncMsg}
         </div>
+      )}
+      {msg && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-2 text-sm text-rose-700">
+          {msg}
+        </div>
+      )}
+
+      {/* 그래프 */}
+      <div className="card p-3">
+        {loading ? (
+          <div className="text-sm text-gray-600">그래프 준비 중…</div>
+        ) : chartDaily.labels.length === 0 ? (
+          <div className="text-sm text-gray-500">표시할 데이터가 없습니다.</div>
+        ) : (
+          <LineChart labels={chartDaily.labels} values={chartDaily.values} curved={curved} />
+        )}
+      </div>
+
+      {/* 표 */}
+      <div className="card p-3">
+        {loading ? (
+          <div className="text-sm text-gray-600">불러오는 중…</div>
+        ) : (
+          <TableReport mode={mode} data={grouped} isAdmin={isAdmin} />
+        )}
       </div>
     </div>
   );
 }
 
-/* =================== 표 컴포넌트 =================== */
-function TableReport({
-  mode, data, isAdmin,
-}: {
-  mode: Mode;
-  data: Grouped;
-  isAdmin: boolean;
-}) {
+/* ===== 표 컴포넌트 ===== */
+function TableReport({ mode, data, isAdmin }: { mode: Mode; data: Grouped; isAdmin: boolean; }) {
   const baseHeaders = mode === 'employee'
     ? ['직원', '건수', '매출', '자재비', '인건비', '기타비용']
     : ['기간', '건수', '매출', '자재비', '인건비', '기타비용'];
 
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-[760px] w-full border border-sky-100">
-        <thead className="bg-sky-50">
+      <table className="min-w-[760px] w-full text-sm">
+        <thead className="bg-sky-50/60 border-b border-sky-100">
           <tr>
             {baseHeaders.map(h => (
-              <th key={h} className="border border-sky-100 px-2 py-1 text-left text-sm">{h}</th>
+              <th key={h} className="px-2 py-2 text-left font-semibold text-sky-900">{h}</th>
             ))}
-            <th className="border border-sky-100 px-2 py-1 text-left text-sm">순수익</th>
+            <th className="px-2 py-2 text-left font-semibold text-sky-900">순수익</th>
           </tr>
         </thead>
         <tbody>
           {data.rows.map(r => {
             const net = computeNetGrouped(r);
             return (
-              <tr key={r.key} className="hover:bg-sky-50/50">
-                <td className="border border-sky-100 px-2 py-1 text-sm">{r.label}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm">{r.count}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.revenue)}</td>
-
-                {/* 자재비: 관리자만 숫자, 그 외 *** */}
-                <td className="border border-sky-100 px-2 py-1 text-sm">
-                  {isAdmin ? fmtMoney(r.material_cost_visible) : '***'}
-                </td>
-
-                <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.daily_wage)}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm">{fmtMoney(r.extra_cost)}</td>
-
-                {/* 순수익: 관리자만 숫자, 그 외 *** */}
-                <td className="border border-sky-100 px-2 py-1 text-sm">
-                  {isAdmin ? fmtMoney(net) : '***'}
-                </td>
+              <tr key={r.key} className="border-b border-slate-100 hover:bg-slate-50/60">
+                <td className="px-2 py-2">{r.label}</td>
+                <td className="px-2 py-2">{r.count}</td>
+                <td className="px-2 py-2">{fmtMoney(r.revenue)}</td>
+                <td className="px-2 py-2">{isAdmin ? fmtMoney(r.material_cost_visible) : '***'}</td>
+                <td className="px-2 py-2">{fmtMoney(r.daily_wage)}</td>
+                <td className="px-2 py-2">{fmtMoney(r.extra_cost)}</td>
+                <td className="px-2 py-2">{isAdmin ? fmtMoney(net) : '***'}</td>
               </tr>
             );
           })}
         </tbody>
-        <tfoot className="bg-sky-50">
+        <tfoot className="bg-sky-50/40 border-t border-sky-100">
           {(() => {
             const totalNet = computeNetGrouped(data.total);
             return (
               <tr>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">합계</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{data.total.count}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.revenue)}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">
-                  {isAdmin ? fmtMoney(data.total.material_cost_visible) : '***'}
-                </td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.daily_wage)}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">{fmtMoney(data.total.extra_cost)}</td>
-                <td className="border border-sky-100 px-2 py-1 text-sm font-semibold">
-                  {isAdmin ? fmtMoney(totalNet) : '***'}
-                </td>
+                <td className="px-2 py-2 font-semibold">합계</td>
+                <td className="px-2 py-2 font-semibold">{data.total.count}</td>
+                <td className="px-2 py-2 font-semibold">{fmtMoney(data.total.revenue)}</td>
+                <td className="px-2 py-2 font-semibold">{isAdmin ? fmtMoney(data.total.material_cost_visible) : '***'}</td>
+                <td className="px-2 py-2 font-semibold">{fmtMoney(data.total.daily_wage)}</td>
+                <td className="px-2 py-2 font-semibold">{fmtMoney(data.total.extra_cost)}</td>
+                <td className="px-2 py-2 font-semibold">{isAdmin ? fmtMoney(totalNet) : '***'}</td>
               </tr>
             );
           })()}
@@ -705,7 +614,7 @@ function TableReport({
   );
 }
 
-/* =================== 라인 차트(SVG) =================== */
+/* ===== 라인 차트(SVG, 가로 스크롤 허용) ===== */
 function LineChart({ labels, values, curved }: { labels: string[]; values: number[]; curved: boolean }) {
   const w = Math.max(320, Math.min(1040, labels.length * 64));
   const h = 280;
@@ -758,9 +667,7 @@ function LineChart({ labels, values, curved }: { labels: string[]; values: numbe
         })}
 
         <path d={path} fill="none" stroke="black" strokeWidth={2} />
-        {points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r={2} fill="black" />
-        ))}
+        {points.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={2} fill="black" />)}
       </svg>
     </div>
   );
@@ -784,13 +691,10 @@ function buildSmoothPath(pts: {x:number;y:number}[]) {
   return d.join(' ');
 }
 
-/* =================== 그룹핑/유틸 =================== */
-function groupByDay(rows: Row[]): Grouped {
-  return group(rows, (d) => format(d, 'yyyy-MM-dd'));
-}
-function groupByMonth(rows: Row[]): Grouped {
-  return group(rows, (d) => format(d, 'yyyy-MM'));
-}
+/* ===== 그룹핑/유틸 ===== */
+function groupByDay(rows: Row[]): Grouped { return group(rows, (d) => format(d, 'yyyy-MM-dd')); }
+function groupByMonth(rows: Row[]): Grouped { return group(rows, (d) => format(d, 'yyyy-MM')); }
+
 function groupByEmployee(rows: Row[]): Grouped {
   type Acc = GroupedRow & { _ids: Set<string> };
   const map = new Map<string, Acc>();
@@ -815,10 +719,10 @@ function groupByEmployee(rows: Row[]): Grouped {
     }
     const g = map.get(norm)!;
     g.count += 1;
-    g.revenue                 += num(r.revenue);
-    g.material_cost_visible   += num(r.material_cost_visible);
-    g.daily_wage              += num(r.daily_wage);
-    g.extra_cost              += num(r.extra_cost);
+    g.revenue               += num(r.revenue);
+    g.material_cost_visible += num(r.material_cost_visible);
+    g.daily_wage            += num(r.daily_wage);
+    g.extra_cost            += num(r.extra_cost);
 
     const id = (r.employee_id ?? '').trim();
     if (id) g._ids.add(id);
@@ -878,21 +782,17 @@ function sumGroups(acc: GroupedRow, r: GroupedRow): GroupedRow {
     extra_cost: acc.extra_cost + r.extra_cost,
   };
 }
-
-// 그룹 단위 순수익: 관리자일 때만 표시되도록 위에서 마스킹
 function computeNetGrouped(x: {revenue:number; material_cost_visible:number; daily_wage:number; extra_cost:number}) {
   return num(x.revenue) - num(x.material_cost_visible) - num(x.daily_wage) - num(x.extra_cost);
 }
 
 function fmtMoney(n: number) {
   if (!Number.isFinite(n) || n === 0) return n === 0 ? '₩0' : '-';
-  try {
-    return new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 }).format(n);
-  } catch { return `${Math.round(n).toLocaleString()}원`; }
+  try { return new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 }).format(n); }
+  catch { return `${Math.round(n).toLocaleString()}원`; }
 }
 function num(v: number | null | undefined) { const x = Number(v ?? 0); return Number.isFinite(x) ? x : 0; }
 
-// 날짜 파서 (YYYY-MM-DD)
 function parseDateInput(s: string) {
   if (!s) return null;
   const d = new Date(s + 'T00:00:00');
@@ -904,15 +804,8 @@ function toDateInputValue(d: Date) {
   const dd = String(d.getDate()).padStart(2,'0');
   return `${yyyy}-${mm}-${dd}`;
 }
-function toYYYYMM(s?: string | null) {
-  if (!s) return '';
-  return s.slice(0, 7);
-}
-
-// 이름 정규화
-function normalizeName(n?: string | null) {
-  return ((n ?? '').trim().toLowerCase()) || '';
-}
+function toYYYYMM(s?: string | null) { return s ? s.slice(0, 7) : ''; }
+function normalizeName(n?: string | null) { return ((n ?? '').trim().toLowerCase()) || ''; }
 
 /** schedules 전체에서 같은 이름의 employee_id가 "정확히 1개"면 그 ID 반환 */
 async function resolveEmployeeIdByName(name: string): Promise<string | null> {

@@ -153,53 +153,52 @@ export default function MaterialsPage() {
   }
 
   /** ===== 자재 등록 ===== */
-async function onCreateMaterial() {
-  setMsg(null);
+  async function onCreateMaterial() {
+    setMsg(null);
 
-  // 입력값 정리
-  const name = (matName ?? '').trim();
-  const vendor = (matVendor ?? '').trim();
-  const priceNum = Number(matPrice);
+    // 입력값 정리
+    const name = (matName ?? '').trim();
+    const vendor = (matVendor ?? '').trim();
+    const priceNum = Number(matPrice);
 
-  // 기본 검증
-  if (!name || matPrice === '' || Number.isNaN(priceNum) || priceNum < 0) {
-    setMsg('자재 이름과 단가를 확인해줘.');
-    return;
+    // 기본 검증
+    if (!name || matPrice === '' || Number.isNaN(priceNum) || priceNum < 0) {
+      setMsg('자재 이름과 단가를 확인해줘.');
+      return;
+    }
+
+    // 화면엔 없지만 DB가 요구하는 필드들 자동 채움
+    const quantity = 1;                                      // ✅ 기본 1개로 등록
+    const date = new Date().toISOString().slice(0, 10);      // ✅ 오늘 날짜(YYYY-MM-DD)
+    const total_amount = quantity * priceNum;                 // ✅ 총액 = 수량 * 단가
+
+    // DB 컬럼에 맞춘 payload
+    const payload = {
+      item: name,                 // ✅ 필수
+      // 아래는 부작용 방지(다른 화면에서 name 쓰고 있을 수도 있으니 함께 저장)
+      name: name,                 
+      vendor: vendor || null,
+      unit_price: priceNum,       // ✅ 필수
+      quantity,                   // ✅ 필수
+      date,                       // ✅ 필수
+      total_amount,               // ✅ 필수
+    };
+
+    const { error } = await supabase.from('materials').insert([payload]);
+
+    if (error) {
+      setMsg(`자재 등록 실패: ${error.code ? error.code + ' - ' : ''}${error.message}`);
+      console.error('onCreateMaterial error:', error);
+      return;
+    }
+
+    // 초기화 & 새로고침
+    setMatName('');
+    setMatVendor('');
+    setMatPrice('');
+    await loadBase();
+    setMsg('자재 등록 완료');
   }
-
-  // 화면엔 없지만 DB가 요구하는 필드들 자동 채움
-  const quantity = 1;                                      // ✅ 기본 1개로 등록
-  const date = new Date().toISOString().slice(0, 10);      // ✅ 오늘 날짜(YYYY-MM-DD)
-  const total_amount = quantity * priceNum;                 // ✅ 총액 = 수량 * 단가
-
-  // DB 컬럼에 맞춘 payload
-  const payload = {
-    item: name,                 // ✅ 필수
-    // 아래는 부작용 방지(다른 화면에서 name 쓰고 있을 수도 있으니 함께 저장)
-    name: name,                 
-    vendor: vendor || null,
-    unit_price: priceNum,       // ✅ 필수
-    quantity,                   // ✅ 필수
-    date,                       // ✅ 필수
-    total_amount,               // ✅ 필수
-  };
-
-  const { error } = await supabase.from('materials').insert([payload]);
-
-  if (error) {
-    setMsg(`자재 등록 실패: ${error.code ? error.code + ' - ' : ''}${error.message}`);
-    console.error('onCreateMaterial error:', error);
-    return;
-  }
-
-  // 초기화 & 새로고침
-  setMatName('');
-  setMatVendor('');
-  setMatPrice('');
-  await loadBase();
-  setMsg('자재 등록 완료');
-}
-
 
   /** ===== 자재 수정 모드 진입 ===== */
   function startEdit(id: string) {

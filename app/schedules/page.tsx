@@ -1,4 +1,4 @@
-// FILE: /app/schedules/page.tsx
+// FILE: app/schedules/page.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -214,7 +214,7 @@ function SchedulesInner() {
         id: r.id,
         title: r.title ?? '',
         location: '-',                                   // 뷰에 없음
-        status: r.off_day ? 'off' as any : 'scheduled', // 간단 추론/기본값
+        status: r.off_day ? 'cancelled' : 'scheduled',  // 간단 추론/기본값
         start_ts: r.start_ts,
         end_ts: r.end_ts,
         daily_wage: r.daily_wage ?? 0,
@@ -338,16 +338,16 @@ function SchedulesInner() {
   return (
     <div className="space-y-6">
       {/* 타이틀 */}
-      <div className="flex items-end justify-between">
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">스케줄</h1>
           <p className="text-slate-600 text-sm mt-1">작업 일정을 생성하고 상태를 관리하세요.</p>
         </div>
 
         {/* 상단 액션 */}
-        <div className="flex items-center gap-2">
-          <button onClick={() => loadRows()} className="btn">새로고침</button>
-          <button onClick={() => setFormOpen((v) => !v)} className="btn-primary">
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => loadRows()} className="btn min-h-[var(--tap-size)]">새로고침</button>
+          <button onClick={() => setFormOpen((v) => !v)} className="btn-primary min-h-[var(--tap-size)]">
             {formOpen ? '등록 폼 닫기' : '+ 새 일정'}
           </button>
         </div>
@@ -358,7 +358,7 @@ function SchedulesInner() {
         <div className="flex flex-col md:flex-row items-start md:items-end gap-3">
           {isElevated ? (
             <>
-              <div className="grow">
+              <div className="grow w-full md:w-auto">
                 <EmployeePicker label="직원별 보기(선택 시 해당 직원만)" value={viewEmp} onChange={setViewEmp} />
               </div>
               <label className="inline-flex items-center gap-2 text-sm">
