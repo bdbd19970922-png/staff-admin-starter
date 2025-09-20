@@ -136,17 +136,36 @@ export default function AuthBar() {
   return (
     <header className="sticky top-0 z-10 w-full border-b bg-white">
       <div className="mx-auto max-w-screen-xl px-2 sm:px-4">
-        {/* 모바일: 얇은 바 (메뉴/로그아웃만) */}
-        <div className="flex h-12 items-center justify-between sm:hidden">
+        {/* 모바일: 더 얇은 바 (h-10) - [메뉴][로고][이메일][로그아웃] */}
+        <div className="flex h-10 items-center justify-between sm:hidden">
+          {/* 메뉴 */}
           <button
-            className="rounded border px-3 py-1 text-sm"
+            className="h-8 px-3 rounded border text-sm shrink-0"
             onClick={() => window.dispatchEvent(new CustomEvent('toggle-menu'))}
+            aria-label="메뉴"
           >
             메뉴
           </button>
+
+          {/* 로고 + 이메일 (가운데 묶음) */}
+          <div className="flex items-center gap-2 min-w-0">
+            {/* 로고: 메뉴 버튼과 같은 높이(h-8) */}
+            <img
+              src="/logo.png"
+              alt="로고"
+              className="h-8 w-auto shrink-0 select-none"
+              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+            />
+            <span className="text-xs text-gray-700 truncate max-w-[55vw]">
+              {loading ? '확인 중…' : (email ?? '비로그인')}
+            </span>
+          </div>
+
+          {/* 로그아웃 */}
           <button
-            className="rounded border px-3 py-1 text-sm"
+            className="h-8 px-3 rounded border text-sm shrink-0"
             onClick={onLogout}
+            aria-label="로그아웃"
           >
             로그아웃
           </button>
