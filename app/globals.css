@@ -155,3 +155,46 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
+@layer utilities {
+  /* 버튼 규격: 모바일/데스크탑 분기 */
+  .btn       { @apply rounded border leading-none whitespace-nowrap hover:bg-gray-50 active:scale-[0.98]; }
+  .btn-md    { @apply h-9 px-3 text-sm; }     /* 데스크탑 */
+  .btn-mb    { @apply h-7 px-2 text-[11px]; } /* 모바일 */
+
+  /* 가독성/간격 */
+  .text-tight { @apply leading-tight; }
+  .row-tight  { @apply gap-2; }
+
+  /* 표시 토글(반응형) */
+  .only-mobile { @apply sm:hidden; }
+  .hide-mobile { @apply hidden sm:block; }
+
+  /* 항상 가로쓰기(세로 글꼴 방지) */
+  .no-vertical { writing-mode: horizontal-tb; }
+
+  /* react-big-calendar 모바일 다이어트 */
+  .rbc-mb .rbc-event          { padding: 2px 6px; font-size: 12px; }
+  .rbc-mb .rbc-event-label    { display: none; }
+  .rbc-mb .rbc-timeslot-group { min-height: 28px; }
+  .rbc-mb .rbc-time-gutter    { width: 36px; }
+}
+/* === Mobile-only pastel background & transparent wrappers === */
+@media (max-width: 639px) {
+  /* 전역 파스텔을 확실히 노출 */
+  #__mobilePastel {
+    /* 이미 layout.tsx에서 그라데이션을 넣었지만, 혹시 상위 스타일이 덮으면 여기서 보강 */
+    background:
+      radial-gradient(900px 500px at 10% -10%, rgba(56,189,248,0.18), transparent),
+      radial-gradient(800px 400px at 90% -5%, rgba(99,102,241,0.12), transparent),
+      linear-gradient(to bottom, #f8fafc 0%, #f0f9ff 100%) !important;
+  }
+
+  /* 내용 래퍼/주요 컨테이너는 모바일에서 투명 처리 (카드/모달 등은 그대로 흰색 유지) */
+  main,
+  .app-container,
+  [class~="app-container"],
+  [data-page-root],
+  .page-root {
+    background-color: transparent !important;
+  }
+}

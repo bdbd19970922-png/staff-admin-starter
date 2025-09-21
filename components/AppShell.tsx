@@ -116,10 +116,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <div
       className="
         min-h-screen text-slate-900
-        from-slate-50 to-sky-50
-        bg-[radial-gradient(900px_500px_at_10%_-10%,rgba(56,189,248,0.12),transparent),
-            radial-gradient(800px_400px_at_90%_-5%,rgba(99,102,241,0.08),transparent),
-            linear-gradient(to_bottom,var(--tw-gradient-stops))]
+        /* ▼ 변경: 모바일은 투명, 데스크탑은 흰 배경 유지 */
+        sm:bg-white bg-transparent
       "
     >
       {/* TopBar */}

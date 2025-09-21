@@ -355,7 +355,6 @@ export default function Page() {
         .select('memo,paid,employee_id,employee_name,pay_month')
         .eq('paid', true);
 
-      // ←← 여기 핵심: 월 필터는 eq + ilike OR로 묶어서 "YYYY-MM" + "YYYY-MM-part-..." 모두 포함
       if (month) {
         payQ = payQ.or(`pay_month.eq.${month},pay_month.ilike.*${month}*`);
       }
@@ -660,22 +659,52 @@ export default function Page() {
         ) : filtered.length === 0 ? (
           <div className="p-6 text-slate-500">표시할 급여 데이터가 없습니다.</div>
         ) : mode === 'employee' ? (
-          <EmployeeTable
-            groups={toEmployeeGroups(filtered)}
-            onDetail={(g) => openTimeline(g.employee_id, g.employee_name)}
-          />
+          <>
+            {/* 📱 모바일 카드 */}
+            <div className="sm:hidden">
+              <MobileEmployeeCards
+                groups={toEmployeeGroups(filtered)}
+                onDetail={(g) => openTimeline(g.employee_id, g.employee_name)}
+              />
+            </div>
+            {/* 🖥️ 데스크탑 테이블 */}
+            <div className="hidden sm:block">
+              <EmployeeTable
+                groups={toEmployeeGroups(filtered)}
+                onDetail={(g) => openTimeline(g.employee_id, g.employee_name)}
+              />
+            </div>
+          </>
         ) : (
-          <ListTable
-            rows={filtered}
-            edit={edit}
-            isAdmin={isAdmin}
-            setRowMemo={setRowMemo}
-            setRowPaidDate={setRowPaidDate}
-            saveMemo={saveMemo}
-            openPaidModal={openPaidModal}
-            canMarkPaid={() => true}
-            onDelete={deleteRow}
-          />
+          <>
+            {/* 📱 모바일 카드 */}
+            <div className="sm:hidden">
+              <MobileListCards
+                rows={filtered}
+                isAdmin={isAdmin}
+                edit={edit}
+                setRowMemo={setRowMemo}
+                setRowPaidDate={setRowPaidDate}
+                saveMemo={saveMemo}
+                openPaidModal={openPaidModal}
+                onDelete={deleteRow}
+              />
+            </div>
+            {/* 🖥️ 데스크탑 테이블 */}
+            <div className="hidden sm:block">
+              <ListTable
+                rows={filtered}
+                edit={edit}
+                isAdmin={isAdmin}
+                setRowMemo={setRowMemo}
+                setRowPaidDate={setRowPaidDate}
+                saveMemo={saveMemo}
+                openPaidModal={openPaidModal}
+                canMarkPaid={() => true}
+                onDelete={deleteRow}
+              />
+            </div>
+          </>
         )}
       </section>
 
@@ -710,7 +739,7 @@ export default function Page() {
               <div className="text-sm text-slate-600">체크한 항목만 선택 지급됩니다.</div>
               <div className="flex items-center gap-2">
                 <label className="text-sm">
-                  <input type="checkbox" className="checkbox mr-1" checked={tl.list.every(x => x.checked)} onChange={e => tlAll(e.target.checked)} />
+                  <input type="checkbox" className="checkbox mr-1" checked={tl.list.every(x => x.checked || x.off_day || x.paidDone)} onChange={e => tlAll(e.target.checked)} />
                   전체선택
                 </label>
                 <label className="text-sm">
@@ -720,83 +749,165 @@ export default function Page() {
               </div>
             </div>
 
-            {/* 타임라인 표 (세로 스크롤) */}
-            <div className="overflow-auto max-h-[70vh]">
-              {tl.loading ? (
-                <div className="p-4 text-sm text-slate-600">불러오는 중…</div>
-              ) : tl.error ? (
-                <div className="p-4 text-sm text-rose-700">{tl.error}</div>
-              ) : tl.list.length === 0 ? (
-                <div className="p-4 text-sm text-slate-500">해당 월의 작업이 없습니다.</div>
-              ) : (
-                <table className="min-w-[820px] w-full text-sm">
-                  <thead className="bg-sky-50/60 border-b border-sky-100">
-                    <tr>
-                      <Th className="w-[48px]">선택</Th>
-                      <Th className="w-[150px]">날짜/시간</Th>
-                      <Th>작업</Th>
-                      <Th className="w-[240px]">주소</Th>
-                      <Th className="text-right w-[120px]">일당</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
+            {/* 📱 모바일: 카드형 리스트 + 하단 고정 합계/버튼 바 */}
+            <div className="sm:hidden">
+              <div className="max-h-[calc(100vh-220px)] overflow-auto pr-1">
+                {tl.loading ? (
+                  <div className="p-4 text-sm text-slate-600">불러오는 중…</div>
+                ) : tl.error ? (
+                  <div className="p-4 text-sm text-rose-700">{tl.error}</div>
+                ) : tl.list.length === 0 ? (
+                  <div className="p-4 text-sm text-slate-500">해당 월의 작업이 없습니다.</div>
+                ) : (
+                  <div className="space-y-2">
                     {tl.list.map(x => (
-                      <tr key={x.id} className="border-b border-slate-100 hover:bg-slate-50/60">
-                        <Td>
-                          <input
-                            type="checkbox"
-                            className="checkbox"
-                            checked={x.checked}
-                            onChange={e => tlToggle(x.id, e.target.checked)}
-                            disabled={!!x.off_day || !!x.paidDone}
-                            title={
-                              x.off_day
-                                ? '휴무는 선택할 수 없습니다'
-                                : (x.paidDone ? '이미 지급된 항목입니다' : '선택')
-                            }
-                          />
-                        </Td>
-                        <Td>
-                          <div>{format(new Date(x.start_ts), 'yyyy-MM-dd')}</div>
-                          <div className="text-[11px] text-slate-500">
-                            {format(new Date(x.start_ts), 'HH:mm')} ~ {format(new Date(x.end_ts), 'HH:mm')}
+                      <div
+                        key={x.id}
+                        className="rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_1px_3px_rgba(0,0,0,0.05)]"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <label className="mt-[2px]">
+                            <input
+                              type="checkbox"
+                              className="checkbox"
+                              checked={!!x.checked}
+                              onChange={e => tlToggle(x.id, e.target.checked)}
+                              disabled={!!x.off_day || !!x.paidDone}
+                              title={x.off_day ? '휴무는 선택 불가' : (x.paidDone ? '이미 지급됨' : '선택')}
+                            />
+                          </label>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="text-[13px] font-semibold">
+                                {format(new Date(x.start_ts), 'yyyy-MM-dd')}
+                                <span className="ml-2 text-[12px] text-slate-500">
+                                  {format(new Date(x.start_ts), 'HH:mm')}~{format(new Date(x.end_ts), 'HH:mm')}
+                                </span>
+                              </div>
+                              {x.off_day && (
+                                <span className="inline-flex items-center rounded-full border border-slate-300 text-slate-700 bg-slate-50 px-2 py-[1px] text-[11px]">
+                                  휴무
+                                </span>
+                              )}
+                              {x.paidDone && (
+                                <span className="inline-flex items-center rounded-full border border-emerald-200 text-emerald-700 bg-emerald-50 px-2 py-[1px] text-[11px]">
+                                  지급됨
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-1 text-[13px] text-slate-800 whitespace-pre-line">
+                              {x.title ?? '-'}
+                            </div>
+                            <div className="mt-1 text-[12px] text-slate-500 truncate">
+                              {x.site_address ?? '-'}
+                            </div>
                           </div>
-                        </Td>
-                        <Td className="whitespace-pre-line">
-                          {x.title ?? '-'}
-                          {x.paidDone && (
-                            <span className="ml-2 inline-flex items-center rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-[2px] text-[11px]">
-                              지급됨
-                            </span>
-                          )}
-                        </Td>
-                        <Td className="truncate">{x.site_address ?? '-'}</Td>
-                        <Td className="text-right font-semibold">{fmtKRW(x.daily_wage)}</Td>
-                      </tr>
+                          <div className="text-right text-[13px] font-semibold shrink-0">
+                            {fmtKRW(x.daily_wage)}
+                          </div>
+                        </div>
+                      </div>
                     ))}
-                  </tbody>
-                  <tfoot className="bg-sky-50/40 border-t border-sky-100">
-                    <tr>
-                      <Td className="font-semibold">선택 합계</Td>
-                      <Td colSpan={3} />
-                      <Td className="text-right font-extrabold">{fmtKRW(tlSum)}</Td>
-                    </tr>
-                  </tfoot>
-                </table>
-              )}
+                  </div>
+                )}
+              </div>
+
+              {/* 하단 고정 바 */}
+              <div className="sticky bottom-0 left-0 right-0 mt-3">
+                <div className="rounded-2xl border border-sky-200 bg-sky-50/70 px-3 py-2 flex items-center justify-between">
+                  <div className="text-[13px]">
+                    선택 합계 <b className="ml-1">{fmtKRW(tlSum)}</b>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button className="btn text-[13px] py-1" onClick={closeTimeline}>닫기</button>
+                    <button
+                      className={`btn text-[13px] py-1 ${isAdmin && tlSelected.length > 0 ? 'bg-slate-900 text-white hover:bg-slate-800' : 'opacity-50 cursor-not-allowed'}`}
+                      onClick={createPayrollForSelected}
+                      disabled={!isAdmin || tl.saving || tlSelected.length === 0}
+                      title={isAdmin ? '' : '관리자 전용'}
+                    >
+                      선택 지급
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
 
-            {/* 액션 */}
-            <div className="flex justify-end gap-2">
-              <button className="btn" onClick={closeTimeline}>닫기</button>
-              <button
-                className={`btn ${isAdmin ? 'bg-slate-900 text-white hover:bg-slate-800' : 'opacity-50 cursor-not-allowed'}`}
-                onClick={createPayrollForSelected}
-                disabled={!isAdmin || tl.saving || tlSelected.length === 0}
-                title={isAdmin ? '' : '관리자 전용'}
-              >
-                선택 지급
-              </button>
+            {/* 🖥️ 데스크탑/태블릿: 기존 표 유지 */}
+            <div className="hidden sm:block">
+              <div className="overflow-auto max-h-[70vh]">
+                {tl.loading ? (
+                  <div className="p-4 text-sm text-slate-600">불러오는 중…</div>
+                ) : tl.error ? (
+                  <div className="p-4 text-sm text-rose-700">{tl.error}</div>
+                ) : tl.list.length === 0 ? (
+                  <div className="p-4 text-sm text-slate-500">해당 월의 작업이 없습니다.</div>
+                ) : (
+                  <table className="min-w-[820px] w-full text-sm">
+                    <thead className="bg-sky-50/60 border-b border-sky-100 sticky top-0 z-10">
+                      <tr>
+                        <Th className="w-[48px]">선택</Th>
+                        <Th className="w-[150px]">날짜/시간</Th>
+                        <Th>작업</Th>
+                        <Th className="w-[240px]">주소</Th>
+                        <Th className="text-right w-[120px]">일당</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tl.list.map(x => (
+                        <tr key={x.id} className="border-b border-slate-100 hover:bg-slate-50/60">
+                          <Td>
+                            <input
+                              type="checkbox"
+                              className="checkbox"
+                              checked={x.checked}
+                              onChange={e => tlToggle(x.id, e.target.checked)}
+                              disabled={!!x.off_day || !!x.paidDone}
+                              title={x.off_day ? '휴무는 선택할 수 없습니다' : (x.paidDone ? '이미 지급된 항목입니다' : '선택')}
+                            />
+                          </Td>
+                          <Td>
+                            <div>{format(new Date(x.start_ts), 'yyyy-MM-dd')}</div>
+                            <div className="text-[11px] text-slate-500">
+                              {format(new Date(x.start_ts), 'HH:mm')} ~ {format(new Date(x.end_ts), 'HH:mm')}
+                            </div>
+                          </Td>
+                          <Td className="whitespace-pre-line">
+                            {x.title ?? '-'}
+                            {x.paidDone && (
+                              <span className="ml-2 inline-flex items-center rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-[2px] text-[11px]">
+                                지급됨
+                              </span>
+                            )}
+                          </Td>
+                          <Td className="truncate">{x.site_address ?? '-'}</Td>
+                          <Td className="text-right font-semibold">{fmtKRW(x.daily_wage)}</Td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-sky-50/40 border-t border-sky-100 sticky bottom-0">
+                      <tr>
+                        <Td className="font-semibold">선택 합계</Td>
+                        <Td colSpan={3} />
+                        <Td className="text-right font-extrabold">{fmtKRW(tlSum)}</Td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                )}
+              </div>
+
+              {/* 액션 */}
+              <div className="flex justify-end gap-2 mt-3">
+                <button className="btn" onClick={closeTimeline}>닫기</button>
+                <button
+                  className={`btn ${isAdmin ? 'bg-slate-900 text-white hover:bg-slate-800' : 'opacity-50 cursor-not-allowed'}`}
+                  onClick={createPayrollForSelected}
+                  disabled={!isAdmin || tl.saving || tlSelected.length === 0}
+                  title={isAdmin ? '' : '관리자 전용'}
+                >
+                  선택 지급
+                </button>
+              </div>
             </div>
           </div>
         </Modal>
@@ -805,7 +916,7 @@ export default function Page() {
   );
 }
 
-/* ============ 목록 테이블(행별 편집) ============ */
+/* ============ 목록 테이블(행별 편집, 데스크탑) ============ */
 function ListTable({
   rows, edit, isAdmin, setRowMemo, setRowPaidDate, saveMemo, openPaidModal, canMarkPaid, onDelete,
 }: {
@@ -903,8 +1014,7 @@ function ListTable({
   );
 }
 
-/* ============ 직원별 집계 테이블(상세보기 추가) ============ */
-
+/* ============ 직원별 집계 테이블(상세보기 추가, 데스크탑) ============ */
 function toEmployeeGroups(filtered: PayrollRow[]) {
   const map = new Map<string, {
     employee_id: string | null;
@@ -980,7 +1090,98 @@ function EmployeeTable({
   );
 }
 
-/* ===== 공통 모달 컴포넌트 (가벼운 구현) ===== */
+/* ===== 📱 모바일: 카드형 컴포넌트 ===== */
+function MobileEmployeeCards({
+  groups, onDetail,
+}: {
+  groups: Array<{ employee_id: string | null; employee_name: string; count: number; total: number; paid: number; unpaid: number }>;
+  onDetail: (g: { employee_id: string | null; employee_name: string }) => void;
+}) {
+  return (
+    <div className="space-y-2 p-2">
+      {groups.map((g, i) => (
+        <div key={`${g.employee_name}-${i}`} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
+          <div className="flex items-center justify-between">
+            <div className="text-[15px] font-semibold">{g.employee_name || '(미지정)'}</div>
+            <button className="text-[12px] px-2 py-1 rounded-lg border hover:bg-slate-50" onClick={() => onDetail(g)}>상세보기</button>
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-y-1 text-[12px] text-slate-700">
+            <div>건수</div><div className="col-span-2 text-right">{g.count}</div>
+            <div>총액</div><div className="col-span-2 text-right font-semibold">{fmtKRW(g.total)}</div>
+            <div>지급액</div><div className="col-span-2 text-right">{fmtKRW(g.paid)}</div>
+            <div>미지급</div><div className="col-span-2 text-right">{fmtKRW(g.unpaid)}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MobileListCards({
+  rows, isAdmin, edit, setRowMemo, setRowPaidDate, saveMemo, openPaidModal, onDelete,
+}: {
+  rows: PayrollRow[];
+  isAdmin: boolean;
+  edit: Record<string | number, { memo: string; paidDate: string; saving?: boolean }>;
+  setRowMemo: (id: string | number, memo: string) => void;
+  setRowPaidDate: (id: string | number, paidDate: string) => void;
+  saveMemo: (row: PayrollRow) => Promise<void>;
+  openPaidModal: (row: PayrollRow) => void;
+  onDelete: (row: PayrollRow) => Promise<void>;
+}) {
+  return (
+    <div className="space-y-2 p-2">
+      {rows.map(r => {
+        const st = edit[r.id] ?? { memo: r.memo ?? '', paidDate: '' };
+        const saving = !!st.saving;
+        return (
+          <div key={String(r.id)} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
+            <div className="flex items-center justify-between">
+              <div className="text-[14px] font-semibold">{r.employee_name || (r.employee_id ? `ID:${r.employee_id}` : '-')}</div>
+              <div className="text-[12px]">{r.paid ? '지급완료' : '미지급'}</div>
+            </div>
+            <div className="mt-1 text-[12px] text-slate-700 space-y-1">
+              <div className="flex justify-between"><span>월</span><span>{r.pay_month ?? '-'}</span></div>
+              <div className="flex justify-between"><span>기간</span><span>{formatMaybeDate(r.period_start)} ~ {formatMaybeDate(r.period_end)}</span></div>
+              <div className="flex justify-between"><span>지급일</span><span>{formatMaybeDateTime(r.paid_at)}</span></div>
+              <div className="flex justify-between font-semibold"><span>금액</span><span>{fmtKRW(r.total_pay ?? r.amount)}</span></div>
+            </div>
+
+            {/* 메모/액션 */}
+            <div className="mt-2 space-y-2">
+              <textarea
+                className="w-full rounded-xl border px-2 py-1 text-[12px]"
+                rows={2}
+                disabled={!isAdmin}
+                value={st.memo}
+                onChange={e => setRowMemo(r.id, e.target.value)}
+                placeholder="메모"
+              />
+              {isAdmin && (
+                <div className="flex items-center justify-between gap-2">
+                  <input
+                    type="date"
+                    className="input w-[140px] py-1 text-[12px]"
+                    value={st.paidDate}
+                    onChange={e => setRowPaidDate(r.id, e.target.value)}
+                    title="지급일"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button className="btn text-[12px] py-1" disabled={saving} onClick={() => saveMemo(r)}>메모 저장</button>
+                    <button className="btn text-[12px] py-1 bg-slate-900 text-white hover:bg-slate-800" disabled={saving} onClick={() => openPaidModal(r)}>지급완료</button>
+                    <button className="btn text-[12px] py-1 border-rose-300 text-rose-700 hover:bg-rose-50" disabled={saving} onClick={() => onDelete(r)}>삭제</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ===== 공통 모달 컴포넌트 (모바일: 풀스크린 시트, 본문 스크롤 강화) ===== */
 function Modal({
   title, children, onClose,
 }: {
@@ -995,12 +1196,23 @@ function Modal({
       aria-modal="true"
     >
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative w-[92vw] max-w-[980px] rounded-2xl bg-white shadow-2xl border border-slate-200 p-4">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-base font-semibold text-slate-900">{title ?? 'Modal'}</h2>
-          <button className="text-slate-400 hover:text-slate-600" onClick={onClose} aria-label="Close">✕</button>
+      {/* 📱 모바일: 풀스크린 시트 / 🖥️ 데스크탑: 기존 카드형 */}
+      <div className="
+        relative
+        w-screen h-screen rounded-none p-3
+        sm:w-[92vw] sm:max-w-[980px] sm:rounded-2xl sm:p-4 sm:h-auto sm:max-h-[90vh]
+        bg-white shadow-2xl border border-slate-200
+        overflow-auto
+      ">
+        {/* 헤더 고정 */}
+        <div className="sticky top-0 bg-white pb-2 z-10 border-b border-slate-100">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-900 truncate">{title ?? 'Modal'}</h2>
+            <button className="text-slate-400 hover:text-slate-600" onClick={onClose} aria-label="Close">✕</button>
+          </div>
         </div>
-        <div>{children}</div>
+        {/* 본문 */}
+        <div className="mt-2">{children}</div>
       </div>
     </div>
   );

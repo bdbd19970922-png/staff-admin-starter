@@ -137,7 +137,7 @@ export default function AuthBar() {
 
   return (
     // 글자가 세로로 세워지지 않도록 강제: writing-mode 가로 고정
-    <header className="sticky top-0 z-10 w-full border-b bg-white [writing-mode:horizontal-tb]">
+    <header className="sticky top-0 z-10 w-full sm:border-b bg-white [writing-mode:horizontal-tb]">
       <div className="mx-auto max-w-screen-xl px-2 sm:px-3">
         {/* === 모바일 (<= sm) : 여백 최소화, 메뉴 버튼 제거, 글자 가로 고정 === */}
         <div className="flex h-9 items-center justify-between gap-2 sm:hidden">

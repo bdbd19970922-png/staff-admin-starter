@@ -46,13 +46,33 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="ko">
       <head>
         {/* 📱 모바일 뷰포트 필수 */}
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
       </head>
-      {/* 본문 색상/배경은 globals.css에서 지정되므로, 여기선 가독성만 보강 */}
+
+      {/* 본문 색상/배경은 globals.css 기준 유지 */}
       <body className={`${nunito.variable} ${notoSansKR.variable} antialiased`}>
         <ErrorBoundary>
-          {/* 기존 AppShell 그대로, 단 CSR 전용으로 동작 */}
-          <AppShellNoSSR>{children}</AppShellNoSSR>
+          {/* 
+            📱 모바일 전용 파스텔톤 전역 배경 래퍼
+            - <sm: 파스텔 그라데이션 배경
+            - ≥sm: 배경을 흰색으로 고정(기존 데스크탑 UI와 충돌 없음)
+          */}
+          <div
+          id="__mobilePastel"
+            className="
+              min-h-screen
+              bg-[radial-gradient(900px_500px_at_10%_-10%,rgba(56,189,248,0.18),transparent),
+                  radial-gradient(800px_400px_at_90%_-5%,rgba(99,102,241,0.12),transparent),
+                  linear-gradient(to_bottom,rgba(248,250,252,1),rgba(240,249,255,1))]
+              sm:bg-white
+            "
+          >
+            {/* 기존 AppShell 그대로 */}
+            <AppShellNoSSR>{children}</AppShellNoSSR>
+          </div>
         </ErrorBoundary>
       </body>
     </html>
