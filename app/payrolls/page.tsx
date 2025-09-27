@@ -102,7 +102,7 @@ export default function Page() {
   // 관리자: 환경변수 + 프로필(is_admin) 둘 다 인정
   useEffect(() => {
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session} } = await supabase.auth.getSession();
       const uid = session?.user?.id ?? '';
       const email = (session?.user?.email ?? '').toLowerCase();
       setUserId(uid);

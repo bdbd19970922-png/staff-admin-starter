@@ -1,3 +1,4 @@
+// FILE: app/materials/page.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -110,7 +111,7 @@ type Movement = {
 };
 
 /** =================================================================================
- *  📦 기존 자재 페이지 본문 (변경 최소화)
+ *  📦 기존 자재 페이지 본문 (변경 없음)
  * ================================================================================= */
 function MaterialsInner() {
   const [tab, setTab] = useState<'register' | 'inbound' | 'stock' | 'settings'>('register');
@@ -181,7 +182,6 @@ function MaterialsInner() {
           supabase
             .from('materials')
             .select('id,name,vendor,unit_price')
-            .eq('deleted', false)                 // 🔹 소프트 삭제 필터
             .order('name', { ascending: true })
             .returns<Material[]>(),
           supabase
@@ -218,13 +218,7 @@ function MaterialsInner() {
         .order('location_name', { ascending: true })
         .returns<StockRow[]>();
       if (error) throw error;
-
-      // 🔹 소프트 삭제된 자재는 재고현황에서 숨김
-      //    (materialsFull은 deleted=false만 담겨 있음)
-      const activeIds = new Set(materialsFull.map(m => m.id));
-      const filtered = (data ?? []).filter(r => activeIds.has(r.material_id));
-
-      setStock(filtered);
+      setStock(data ?? []);
     } catch (e: any) {
       setMsg(`재고 로드 실패: ${e.message || e}`);
     } finally {
@@ -272,7 +266,6 @@ function MaterialsInner() {
     setMatVendor('');
     setMatPrice('');
     await loadBase();
-    await loadStock();
     setMsg('자재 등록 완료');
   }
 
@@ -302,20 +295,15 @@ function MaterialsInner() {
     if (error) { setMsg(`수정 실패: ${error.message}`); return; }
     setEditId(null);
     await loadBase();
-    await loadStock();
     setMsg('수정 완료');
   }
   async function deleteMaterial(id: string) {
-    if (!confirm('이 자재를 숨길까요? (연결된 입고/사용 기록은 보존됩니다)')) return;
-    // 🔹 하드 삭제 → 소프트 삭제
-    const { error } = await supabase
-      .from('materials')
-      .update({ deleted: true })
-      .eq('id', id);
+    if (!confirm('이 자재를 삭제할까요? (관련 입고/사용 데이터가 있으면 제한될 수 있습니다)')) return;
+    const { error } = await supabase.from('materials').delete().eq('id', id);
     if (error) { setMsg(`삭제 실패: ${error.message}`); return; }
     await loadBase();
     await loadStock();
-    setMsg('삭제(숨김) 완료');
+    setMsg('삭제 완료');
   }
 
   /** ===== 재고 입고 ===== */

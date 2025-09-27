@@ -432,13 +432,7 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            {isAdmin && mode === 'employee' && (
-              <div className="flex items-end">
-                <button className="btn btn-primary" onClick={syncPayrolls}>
-                  직원별 인건비 → 급여 반영
-                </button>
-              </div>
-            )}
+            
           </div>
         </div>
 
