@@ -1,4 +1,3 @@
-// FILE: app/layout.tsx
 import './globals.css';
 import type { ReactNode } from 'react';
 import dynamic from 'next/dynamic';
@@ -28,7 +27,6 @@ const notoSansKR = Noto_Sans_KR({
 // ✅ AppShell을 CSR로만 렌더(SSR 끔) — Hydration 불일치 차단
 const AppShellNoSSR = dynamic(() => import('@/components/AppShell'), {
   ssr: false,
-  // 서버/클라 첫 마크업을 동일하게 유지하기 위한 고정 스켈레톤
   loading: () => (
     <div className="min-h-screen w-full flex">
       <aside className="w-[220px] shrink-0 border-r bg-white">
@@ -40,6 +38,9 @@ const AppShellNoSSR = dynamic(() => import('@/components/AppShell'), {
     </div>
   ),
 });
+
+// ✅ React Query Provider도 클라이언트에서만 감싸기
+const RQProviderNoSSR = dynamic(() => import('./_rq-provider'), { ssr: false });
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
@@ -61,7 +62,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             - ≥sm: 배경을 흰색으로 고정(기존 데스크탑 UI와 충돌 없음)
           */}
           <div
-          id="__mobilePastel"
+            id="__mobilePastel"
             className="
               min-h-screen
               bg-[radial-gradient(900px_500px_at_10%_-10%,rgba(56,189,248,0.18),transparent),
@@ -70,8 +71,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               sm:bg-white
             "
           >
-            {/* 기존 AppShell 그대로 */}
-            <AppShellNoSSR>{children}</AppShellNoSSR>
+            {/* ✅ React Query Provider로 감싼 뒤 AppShell 렌더 */}
+            <RQProviderNoSSR>
+              <AppShellNoSSR>{children}</AppShellNoSSR>
+            </RQProviderNoSSR>
           </div>
         </ErrorBoundary>
       </body>

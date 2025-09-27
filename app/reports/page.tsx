@@ -232,168 +232,36 @@ export default function ReportsPage() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const canSyncPayroll = isAdmin && mode === 'employee';
 
-  async function safeUpsertPayroll(record: {
-    employee_id: string | null;
-    employee_name: string | null;
-    pay_month: string;
-    period_start: string;
-    period_end: string;
-    amount: number | null;
-    total_pay: number | null;
-    memo: string | null;
-  }) {
-    const keyMonth =
-      toYYYYMM(record.pay_month) ||
-      toYYYYMM(record.period_start) ||
-      toYYYYMM(record.period_end);
-    if (!keyMonth) throw new Error('pay_month 계산 실패');
-
-    if (record.employee_id) {
-      const { data: ex, error: exErr } = await supabase
-        .from('payrolls')
-        .select('id, paid')
-        .eq('employee_id', record.employee_id)
-        .eq('pay_month', keyMonth)
-        .maybeSingle();
-      if (exErr && exErr.code !== 'PGRST116') throw exErr;
-
-      if (ex?.paid === true) return { action: 'skip_paid' as const };
-
-      const payload = {
-        employee_id: record.employee_id,
-        employee_name: record.employee_name,
-        pay_month: keyMonth,
-        period_start: record.period_start,
-        period_end: record.period_end,
-        amount: record.amount ?? null,
-        total_pay: record.total_pay ?? record.amount ?? null,
-        paid: ex?.paid ?? false,
-        paid_at: ex?.paid ? (new Date()).toISOString().slice(0,10) : null,
-        memo: record.memo ?? null,
-      };
-
-      const { error } = await supabase
-        .from('payrolls')
-        .upsert([payload], { onConflict: 'employee_id,pay_month', ignoreDuplicates: false, defaultToNull: false })
-        .select('id');
-
-      if (error) throw error;
-      return { action: ex ? ('update' as const) : ('insert' as const) };
-    }
-
-    let existing: { id: string; paid: boolean } | null = null;
-    let q = supabase
-      .from('payrolls')
-      .select('id, paid')
-      .is('employee_id', null)
-      .eq('pay_month', keyMonth)
-      .limit(1);
-    if (record.employee_name) q = q.ilike('employee_name', record.employee_name);
-    const { data: ex2, error: exErr2 } = await q.maybeSingle();
-    if (exErr2 && exErr2.code !== 'PGRST116') throw exErr2;
-    existing = (ex2 as any) ?? null;
-
-    if (existing) {
-      if (existing.paid === true) return { action: 'skip_paid' as const };
-      const { error: upErr } = await supabase
-        .from('payrolls')
-        .update({
-          amount: record.amount ?? null,
-          total_pay: record.total_pay ?? record.amount ?? null,
-          memo: record.memo ?? null,
-          period_start: record.period_start,
-          period_end: record.period_end,
-        })
-        .eq('id', existing.id);
-      if (upErr) throw upErr;
-      return { action: 'update' as const };
-    } else {
-      const payload2 = {
-        employee_id: null as string | null,
-        employee_name: record.employee_name,
-        pay_month: keyMonth,
-        period_start: record.period_start,
-        period_end: record.period_end,
-        amount: record.amount ?? null,
-        total_pay: record.total_pay ?? record.amount ?? null,
-        paid: false,
-        paid_at: null,
-        memo: record.memo ?? null,
-      };
-      const { error: insErr } = await supabase.from('payrolls').insert(payload2);
-      if (insErr) throw insErr;
-      return { action: 'insert' as const };
-    }
-  }
-
+  // ✅ 변경: 스케줄 단위 멱등 반영 (DB RPC 호출)
   const syncPayrolls = async () => {
     if (!canSyncPayroll) return;
-    setSyncMsg(null);
+    setSyncMsg('진행 중…');
 
-    const s = parseDateInput(dateFrom);
-    const e = parseDateInput(dateTo);
-    if (s == null || e == null) {
-      setSyncMsg('⚠️ 기간을 올바르게 선택해주세요.');
+    // 현재 화면의 날짜/직원 필터가 적용된 행들(=스케줄 단위)을 대상으로 처리
+    const base = filteredByDate;
+    const targetRows = (mode === 'employee' && empNameFilter !== 'all')
+      ? base.filter(r => (((r.employee_name ?? '').trim()) || '(미지정)').toLowerCase() === empNameFilter)
+      : base;
+
+    // 스케줄 PK만 추출해서 중복 제거
+    const scheduleIds = Array.from(new Set(
+      targetRows.map(r => r.id).filter((v): v is number => Number.isFinite(v))
+    ));
+
+    if (scheduleIds.length === 0) {
+      setSyncMsg('선택된 기간/필터에 반영할 스케줄이 없습니다.');
       return;
     }
-    const sameMonth = s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth();
-    const payMonthDisplay = sameMonth ? format(s, 'yyyy-MM') : `${dateFrom}~${dateTo}`;
-
-    const byEmp = groupByEmployee(filteredByDate);
-
-    const needResolve = byEmp.rows.filter(r => !r.employee_id).map(r => r.label);
-    const resolvedMap = new Map<string, string>();
-    await Promise.all(
-      needResolve.map(async (name) => {
-        const id = await resolveEmployeeIdByName(name);
-        if (id) resolvedMap.set(name, id);
-      })
-    );
-
-    const raw = byEmp.rows.map(r => {
-      const id = r.employee_id ?? resolvedMap.get(r.label) ?? null;
-      const name = (r.employee_name ?? r.label ?? '').trim();
-      const total = r.daily_wage;
-      return {
-        employee_id: id,
-        employee_name: name || null,
-        pay_month: payMonthDisplay,
-        period_start: dateFrom,
-        period_end: dateTo,
-        amount: total,
-        total_pay: total,
-        paid: false,
-        paid_at: null,
-        memo: ' ',
-      };
-    });
-
-    const dedup = new Map<string, typeof raw[number]>();
-    for (const r of raw) {
-      const key =
-        (r.employee_id ? `id:${r.employee_id}` : `name:${(r.employee_name ?? '').toLowerCase()}`) +
-        `|${toYYYYMM(r.pay_month) || toYYYYMM(r.period_start)}`;
-      const prev = dedup.get(key);
-      if (!prev) dedup.set(key, { ...r });
-      else {
-        const sumv = (Number(prev.total_pay ?? 0) || 0) + (Number(r.total_pay ?? 0) || 0);
-        dedup.set(key, { ...prev, amount: sumv, total_pay: sumv });
-      }
-    }
-    const records = Array.from(dedup.values());
 
     try {
-      let inserted = 0, updated = 0, skippedPaid = 0;
-      for (const r of records) {
-        const res = await safeUpsertPayroll(r);
-        if (res.action === 'insert') inserted++;
-        else if (res.action === 'update') updated++;
-        else skippedPaid++;
+      let ok = 0, fail = 0;
+      for (const sid of scheduleIds) {
+        const { error } = await supabase.rpc('reflect_schedule_to_payroll', { p_schedule_id: sid });
+        if (error) fail++; else ok++;
       }
-      const skippedNote = skippedPaid ? ` / 지급완료라 건너뜀 ${skippedPaid}건` : '';
-      setSyncMsg(`✅ 급여 반영 완료: 신규 ${inserted}건 / 갱신 ${updated}건${skippedNote}`);
-    } catch (err: any) {
-      setSyncMsg(`⚠️ 급여 반영 실패: ${err?.message ?? '알 수 없는 오류'}`);
+      setSyncMsg(`✅ 급여 반영 완료: ${ok}건 처리${fail ? ` / 실패 ${fail}건` : ''} (이미 반영된 스케줄은 자동 무시)`);
+    } catch (e: any) {
+      setSyncMsg(`⚠️ 급여 반영 실패: ${e?.message ?? '알 수 없는 오류'}`);
     }
   };
 

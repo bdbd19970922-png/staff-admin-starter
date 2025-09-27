@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import EmployeePicker, { EmployeeValue } from '@/components/EmployeePicker';
+import { useQueryClient } from '@tanstack/react-query';
 
 type Entry = {
   id: number;
@@ -14,37 +15,23 @@ type Entry = {
   pay_date: string | null;
   status: 'planned' | 'paid';
   memo: string | null;
-
-  revenue_amount: number;
-  labor_cost: number;
-  material_cost: number;
-  other_deduction: number;
+  revenue_amount: number | null;
+  labor_cost: number | null;
+  material_cost: number | null;
+  other_deduction: number | null;
 };
 
-export default function EditPayrollClient({ id }: { id: string }) {
+export default function EditPayrollClient({ id }: { id: string | null }) {
   const router = useRouter();
-
-  const idStr = useMemo(() => String(id ?? '').trim(), [id]);
-  const eid = /^\d+$/.test(idStr) ? idStr : null;
-
-  const [isAdmin, setIsAdmin] = useState(false);
-  useEffect(() => {
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      const { data } = await supabase.from('profiles').select('is_admin').eq('id', user.id).maybeSingle();
-      setIsAdmin(Boolean(data?.is_admin));
-    })();
-  }, []);
+  const eid = id ? Number(id) : null;
 
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const [emp, setEmp] = useState<EmployeeValue>({ mode: 'profile', employeeId: '' });
-
+  const [emp, setEmp] = useState<EmployeeValue>({ mode: 'manual', name: '', phone: '' });
   const [jobType, setJobType] = useState('');
   const [payDate, setPayDate] = useState('');
-  const [status, setStatus] = useState<Entry['status']>('planned');
+  const [status, setStatus] = useState<'planned' | 'paid'>('planned');
   const [memo, setMemo] = useState('');
 
   const [revenue, setRevenue] = useState(0);
@@ -53,6 +40,8 @@ export default function EditPayrollClient({ id }: { id: string }) {
   const [other, setOther] = useState(0);
 
   const ownerProfit = revenue - labor - material - other;
+
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (eid === null) { setMsg('잘못된 경로(ID)입니다.'); setLoading(false); return; }
@@ -81,8 +70,9 @@ export default function EditPayrollClient({ id }: { id: string }) {
         setLabor(Number(data.labor_cost || 0));
         setMaterial(Number(data.material_cost || 0));
         setOther(Number(data.other_deduction || 0));
+
       } catch (e: any) {
-        setMsg(e.message || '불러오기 오류');
+        setMsg(e.message || '불러오는 중 오류');
       } finally {
         setLoading(false);
       }
@@ -139,6 +129,20 @@ export default function EditPayrollClient({ id }: { id: string }) {
       if (error) throw error;
 
       alert('저장되었습니다.');
+      // ✅ 저장 직후: 관련 캐시 무효화 + 즉시 재조회 (새로고침 없이 즉시 반영)
+      await queryClient.invalidateQueries({
+        predicate: (q) => {
+          const k = Array.isArray(q.queryKey) ? q.queryKey.join(':') : String(q.queryKey ?? '');
+          return k.includes('payroll') || k.includes('timeline') || k.includes('schedule');
+        }
+      });
+      await queryClient.refetchQueries({
+        predicate: (q) => {
+          const k = Array.isArray(q.queryKey) ? q.queryKey.join(':') : String(q.queryKey ?? '');
+          return k.includes('payroll') || k.includes('timeline') || k.includes('schedule');
+        }
+      });
+
       router.push('/payrolls');
     } catch (e: any) {
       setMsg(e.message || '저장 중 오류');
@@ -154,6 +158,21 @@ export default function EditPayrollClient({ id }: { id: string }) {
       setLoading(true);
       const { error } = await supabase.from('payroll_entries').delete().eq('id', eid);
       if (error) throw error;
+
+      // ✅ 삭제 직후: 관련 캐시 무효화 + 즉시 재조회
+      await queryClient.invalidateQueries({
+        predicate: (q) => {
+          const k = Array.isArray(q.queryKey) ? q.queryKey.join(':') : String(q.queryKey ?? '');
+          return k.includes('payroll') || k.includes('timeline') || k.includes('schedule');
+        }
+      });
+      await queryClient.refetchQueries({
+        predicate: (q) => {
+          const k = Array.isArray(q.queryKey) ? q.queryKey.join(':') : String(q.queryKey ?? '');
+          return k.includes('payroll') || k.includes('timeline') || k.includes('schedule');
+        }
+      });
+
       router.push('/payrolls');
     } catch (e: any) {
       setMsg(e.message || '삭제 중 오류');
@@ -161,6 +180,31 @@ export default function EditPayrollClient({ id }: { id: string }) {
       setLoading(false);
     }
   }
+
+  // ✅ 실시간 갱신: 다른 탭/기기에서 변경돼도 자동으로 최신화
+  useEffect(() => {
+    const ch = supabase
+      .channel('payrolls-and-schedules-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payrolls' }, () => {
+        queryClient.invalidateQueries({
+          predicate: (q) => {
+            const k = Array.isArray(q.queryKey) ? q.queryKey.join(':') : String(q.queryKey ?? '');
+            return k.includes('payroll') || k.includes('timeline');
+          }
+        });
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'schedules' }, () => {
+        queryClient.invalidateQueries({
+          predicate: (q) => {
+            const k = Array.isArray(q.queryKey) ? q.queryKey.join(':') : String(q.queryKey ?? '');
+            return k.includes('schedule') || k.includes('timeline');
+          }
+        });
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(ch); };
+  }, [queryClient]);
 
   if (loading && eid !== null) {
     return <div className="card p-4 text-sm">불러오는 중…</div>;
@@ -174,31 +218,71 @@ export default function EditPayrollClient({ id }: { id: string }) {
         <span className="title-gradient">급여 수정</span>
       </h1>
 
-      <div className="card max-w-3xl p-4">
+      {msg && <div className="alert error">{msg}</div>}
+
+      <div className="card p-4 space-y-4">
         {invalid ? (
-          <div className="text-sm text-red-600">잘못된 경로(ID)입니다. 목록에서 다시 진입해주세요.</div>
+          <div className="text-sm text-gray-600">잘못된 경로(ID)</div>
         ) : (
           <>
-            {msg ? (
-              <div className="mb-3 rounded-xl border border-red-200 bg-red-50 p-2 text-sm text-red-700">
-                {msg}
-              </div>
-            ) : null}
+            {/* 직원 선택 */}
+            <div>
+              <label className="mb-1 block text-sm text-gray-600">직원</label>
+              <EmployeePicker value={emp} onChange={setEmp} />
+            </div>
 
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <EmployeePicker label="직원" value={emp} onChange={setEmp} />
+            {/* 직종 */}
+            <div>
+              <label className="mb-1 block text-sm text-gray-600">직종</label>
+              <input
+                className="input"
+                value={jobType}
+                onChange={(e) => setJobType(e.target.value)}
+                placeholder="예: 용접"
+              />
+            </div>
 
+            {/* 지급일 */}
+            <div>
+              <label className="mb-1 block text-sm text-gray-600">지급일</label>
+              <input
+                type="date"
+                className="input"
+                value={payDate}
+                onChange={(e) => setPayDate(e.target.value)}
+              />
+              {isToday && <div className="mt-1 text-xs text-green-600">* 오늘 날짜입니다</div>}
+            </div>
+
+            {/* 상태 */}
+            <div>
+              <label className="mb-1 block text-sm text-gray-600">상태</label>
+              <select
+                className="input"
+                value={status}
+                onChange={(e) => setStatus(e.target.value as any)}
+              >
+                <option value="planned">미지급(예정)</option>
+                <option value="paid">지급완료</option>
+              </select>
+            </div>
+
+            {/* 메모 */}
+            <div>
+              <label className="mb-1 block text-sm text-gray-600">메모</label>
+              <textarea
+                className="input"
+                rows={4}
+                value={memo}
+                onChange={(e) => setMemo(e.target.value)}
+                placeholder="선택지급 시 [sched:1,2] 형태로 자동 병합됩니다"
+              />
+            </div>
+
+            {/* 금액들 */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>
-                <label className="mb-1 block text-sm text-gray-600">시공 타입</label>
-                <input
-                  className="input"
-                  value={jobType}
-                  onChange={(e) => setJobType(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm text-gray-600">시공비(매출)</label>
+                <label className="mb-1 block text-sm text-gray-600">매출</label>
                 <input
                   type="number"
                   className="input"
@@ -240,57 +324,23 @@ export default function EditPayrollClient({ id }: { id: string }) {
                   min={0}
                 />
               </div>
-
-              <div>
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="block text-sm text-gray-600">지급일</span>
-                  {isToday ? <span className="badge-today">오늘</span> : null}
-                </div>
-                <input
-                  type="date"
-                  className="input"
-                  value={payDate}
-                  onChange={(e) => setPayDate(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm text-gray-600">상태</label>
-                <select
-                  className="select"
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value as Entry['status'])}
-                >
-                  <option value="planned">지급예정</option>
-                  <option value="paid">지급완료</option>
-                </select>
-              </div>
-
-              <div className="md:col-span-2">
-                <label className="mb-1 block text-sm text-gray-600">메모</label>
-                <input
-                  className="input"
-                  value={memo}
-                  onChange={(e) => setMemo(e.target.value)}
-                  placeholder="비고"
-                />
-              </div>
             </div>
 
-            {isAdmin && (
-              <div className="mt-3 text-sm">
-                대표 순수익: <b>₩{Math.round(ownerProfit).toLocaleString()}</b>
-              </div>
-            )}
+            {/* 소유자 이익 */}
+            <div className="text-sm text-gray-700">
+              소유자 이익(예상): <b>{ownerProfit.toLocaleString()}</b> 원
+            </div>
 
-            <div className="mt-4 flex gap-2">
+            {/* 액션 */}
+            <div className="flex gap-2">
               <button
                 onClick={onSave}
                 disabled={invalid || loading}
-                className="btn btn-primary"
+                className="btn primary"
               >
                 저장
               </button>
+
               <button
                 onClick={onDelete}
                 disabled={invalid || loading}

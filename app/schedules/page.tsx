@@ -1,7 +1,7 @@
 // FILE: app/schedules/page.tsx
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import EmployeePicker, { EmployeeValue } from '@/components/EmployeePicker';
@@ -9,9 +9,9 @@ import EmployeePicker, { EmployeeValue } from '@/components/EmployeePicker';
 /* ===== 세션 준비 대기(Unauthorized 예방) ===== */
 async function waitForAuthReady(maxTries = 6, delayMs = 300) {
   for (let i = 0; i < maxTries; i++) {
-    const { data, error } = await supabase.auth.getSession();
+    const { data } = await supabase.auth.getSession();
     const hasToken = !!data?.session?.access_token;
-    if (!error && hasToken) return data.session!;
+    if (hasToken) return data.session!;
     await new Promise((r) => setTimeout(r, delayMs));
   }
   const { data } = await supabase.auth.getSession();
@@ -22,14 +22,15 @@ async function waitForAuthReady(maxTries = 6, delayMs = 300) {
 type Row = {
   id: number;
   title: string;
-  site_address: string;    // ✅ 현장주소(표시/저장 기준 컬럼)
+  site_address: string;
   start_ts: string;
   end_ts: string;
   daily_wage: number;
   status: 'scheduled' | 'in_progress' | 'done' | 'cancelled';
   employee_id?: string | null;
-  employee_name?: string | null;   // 직접입력 이름
-  employee_phone?: string | null;  // 직접입력 전화
+  employee_name?: string | null;
+  employee_phone?: string | null;
+  completed?: boolean;
 };
 
 const STATUS_LABEL: Record<Row['status'], string> = {
@@ -39,7 +40,7 @@ const STATUS_LABEL: Record<Row['status'], string> = {
   cancelled: '취소',
 };
 
-/* ====== 보안뷰 결과 타입 ====== */
+/* ====== 보안뷰 결과 타입(여기에는 completed가 없음) ====== */
 type SchedulesSecureRow = {
   id: number;
   title: string | null;
@@ -53,7 +54,7 @@ type SchedulesSecureRow = {
   material_cost: number | null;
   extra_cost: number | null;
   net_profit_visible: number | null;
-  site_address: string | null;     // ✅ 추가
+  site_address: string | null;
 };
 
 /* ===============================
@@ -106,21 +107,23 @@ function SchedulesInner() {
   const [fullName, setFullName] = useState<string>('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [isManager, setIsManager] = useState(false);
-  const isElevated = isAdmin || isManager; // 관리자 or 매니저
+  const isElevated = isAdmin || isManager;
 
   // 생성용 직원 선택
   const [emp, setEmp] = useState<EmployeeValue>({ mode: 'profile', employeeId: '' });
 
   // 목록/상태
   const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);      // 최초/풀 로딩
+  const [bgLoading, setBgLoading] = useState(false); // ✅ 백그라운드 로딩(리스트 유지)
+  const reloadTimer = useRef<number | null>(null);   // ✅ 실시간 디바운스
   const [msg, setMsg] = useState<string | null>(null);
 
   // 폼
   const [formOpen, setFormOpen] = useState(false);
   const [f, setF] = useState({
     title: '',
-    site_address: '',           // ✅ 현장주소
+    site_address: '',
     start_ts: '',
     end_ts: '',
     daily_wage: 0,
@@ -169,14 +172,15 @@ function SchedulesInner() {
     })();
   }, []);
 
-  async function loadRows() {
-    setLoading(true);
+  /** ✅ 보안뷰 로드 후, 기본 테이블에서 completed만 추가 조회하여 머지 */
+  async function loadRows(soft = false) {
+    if (soft) setBgLoading(true); else setLoading(true);
     setMsg(null);
 
     try {
       await waitForAuthReady();
 
-      // 기본 쿼리(읽기는 보안뷰) — ✅ site_address 포함
+      // 1) 읽기: 보안뷰
       let query = supabase
         .from('schedules_secure')
         .select('id,title,start_ts,end_ts,employee_id,employee_name,off_day,daily_wage,revenue,material_cost,extra_cost,net_profit_visible,site_address')
@@ -206,10 +210,11 @@ function SchedulesInner() {
       const { data, error } = await query.returns<SchedulesSecureRow[]>();
       if (error) throw error;
 
-      const mapped: Row[] = (data ?? []).map((r) => ({
+      // 2) 1차 매핑
+      let mapped: Row[] = (data ?? []).map((r) => ({
         id: r.id,
         title: r.title ?? '',
-        site_address: r.site_address ?? '',     // ✅ 현장주소 매핑
+        site_address: r.site_address ?? '',
         status: r.off_day ? 'cancelled' : 'scheduled',
         start_ts: r.start_ts,
         end_ts: r.end_ts,
@@ -217,32 +222,70 @@ function SchedulesInner() {
         employee_id: r.employee_id ?? null,
         employee_name: r.employee_name ?? '',
         employee_phone: null,
+        completed: false,
       }));
+
+      // 3) ✅ 기본 테이블에서 완료 플래그만 보강
+      const ids = mapped.map(r => r.id);
+      if (ids.length > 0) {
+        const { data: flags, error: fErr } = await supabase
+          .from('schedules')
+          .select('id, completed')
+          .in('id', ids);
+        if (!fErr && flags && flags.length > 0) {
+          const fm = new Map<number, boolean>(flags.map((f: any) => [Number(f.id), !!f.completed]));
+          mapped = mapped.map(r => {
+            const c = fm.get(r.id);
+            if (typeof c === 'boolean') {
+              const status: Row['status'] =
+                r.status === 'cancelled' ? 'cancelled' : (c ? 'done' : r.status);
+              return { ...r, completed: c, status };
+            }
+            return r;
+          });
+        }
+      }
 
       setRows(mapped);
     } catch (e: any) {
       setMsg(e?.message || '데이터 로딩 중 오류가 발생했습니다.');
-      setRows([]);
+      if (!soft) setRows([]);
     } finally {
-      setLoading(false);
+      if (soft) setBgLoading(false); else setLoading(false);
     }
   }
 
+  // 최초/필터 변경 시 로드
   useEffect(() => {
-    loadRows();
+    loadRows(); // 풀 로딩
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isElevated, uid, fullName, viewEmp, onlyMine]);
 
+  // ✅ Realtime 구독: 디바운스 + 소프트 로딩(리스트 유지)
+  useEffect(() => {
+    const ch = supabase
+      .channel('schedules-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedules' }, () => {
+        if (reloadTimer.current) window.clearTimeout(reloadTimer.current);
+        reloadTimer.current = window.setTimeout(() => loadRows(true), 200);
+      })
+      .subscribe();
+    return () => {
+      if (reloadTimer.current) window.clearTimeout(reloadTimer.current);
+      supabase.removeChannel(ch);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function onCreate() {
     setMsg(null);
-
     try {
       await waitForAuthReady();
 
       const payload: any = {
         title: f.title.trim(),
-        site_address: f.site_address.trim(),           // ✅ 캘린더 컬럼
-        location: f.site_address.trim(),               // ✅ 레거시(있다면) 동기화
+        site_address: f.site_address.trim(),
+        location: f.site_address.trim(),
         start_ts: toISO(f.start_ts),
         end_ts: toISO(f.end_ts),
         daily_wage: Number(f.daily_wage || 0),
@@ -298,7 +341,7 @@ function SchedulesInner() {
       setFormOpen(false);
       setF({ title: '', site_address: '', start_ts: '', end_ts: '', daily_wage: 0, status: 'scheduled' });
       setEmp({ mode: 'profile', employeeId: '' });
-      await loadRows();
+      await loadRows(true); // 소프트 리로드
     } catch (e: any) {
       setMsg(e?.message || '등록 중 오류가 발생했습니다.');
     }
@@ -318,7 +361,43 @@ function SchedulesInner() {
       setMsg(error.message);
       return;
     }
-    loadRows();
+    loadRows(true);
+  }
+
+  // ✅ 완료 처리: 급여 트리거 + UI 유지 보수
+  async function onComplete(id: number) {
+    const cur = rows.find(r => r.id === id);
+    if (cur && (cur.completed || cur.status === 'done')) return;
+
+    // 1) 낙관 갱신(리스트 유지)
+    setRows(prev =>
+      prev.map(r => (r.id === id ? { ...r, completed: true, status: r.status === 'cancelled' ? 'cancelled' : 'done' } : r))
+    );
+
+    // 2) DB 반영(트리거가 payrolls 생성/합산)
+    const payload: any = { completed: true };
+    if (uid) payload.completed_by = uid;
+    payload.completed_at = new Date().toISOString();
+
+    const { error } = await supabase.from('schedules').update(payload).eq('id', id);
+    if (error) {
+      alert('완료 처리 실패: ' + error.message);
+      // 실패 시 롤백
+      setRows(prev =>
+        prev.map(r => (r.id === id ? { ...r, completed: false, status: r.status === 'done' ? 'scheduled' : r.status } : r))
+      );
+      return;
+    }
+
+    // 3) 최신 completed만 재확인(새로고침 없이 정합성 ↑)
+    const { data: flag } = await supabase.from('schedules').select('id, completed').eq('id', id).maybeSingle();
+    if (flag) {
+      setRows(prev =>
+        prev.map(r =>
+          r.id === id ? { ...r, completed: !!flag.completed, status: r.status === 'cancelled' ? 'cancelled' : (!!flag.completed ? 'done' : 'scheduled') } : r
+        )
+      );
+    }
   }
 
   const totalWage = useMemo(
@@ -376,6 +455,8 @@ function SchedulesInner() {
             </label>
           )}
         </div>
+        {/* ✅ 백그라운드 동기화 표시 */}
+        {bgLoading && <div className="mt-2 text-xs text-slate-500">동기화 중…</div>}
       </section>
 
       {/* 인라인 등록 폼 */}
@@ -388,7 +469,7 @@ function SchedulesInner() {
             </div>
 
             <div className="md:col-span-2">
-              <label className="mb-1 block text-slate-600">현장주소</label> {/* ✅ 라벨 변경 */}
+              <label className="mb-1 block text-slate-600">현장주소</label>
               <input
                 className="input"
                 value={f.site_address}
@@ -449,13 +530,14 @@ function SchedulesInner() {
 
       {/* ===== 목록 ===== */}
       <section className="card">
-        {loading ? (
+        {(loading && rows.length === 0) ? (
+          // 최초 로딩에만 빈화면 방지용 메시지
           <div className="text-sm text-slate-600">불러오는 중…</div>
         ) : (
           <>
             {/* 📱 모바일: 카드 리스트 */}
             <div className="sm:hidden space-y-2">
-              {rows.length === 0 && (
+              {rows.length === 0 && !loading && (
                 <div className="text-sm text-slate-500">
                   데이터가 없습니다. {isElevated ? '필터를 조정하거나 “+ 새 일정”으로 추가해보세요.' : '관리자/매니저에게 일정을 배정받거나 “+ 새 일정”으로 본인 일정을 추가해보세요.'}
                 </div>
@@ -489,13 +571,22 @@ function SchedulesInner() {
                       <button className="btn h-7 px-2 text-[11px]" onClick={() => onDelete(r.id, r)}>
                         삭제
                       </button>
+                      {/* ✅ 완료 버튼(모바일) */}
+                      <button
+                        className="btn h-7 px-2 text-[11px]"
+                        onClick={() => onComplete(r.id)}
+                        disabled={!!r.completed || r.status === 'done'}
+                        title={r.completed || r.status === 'done' ? '이미 완료됨' : '완료 처리'}
+                      >
+                        {r.completed || r.status === 'done' ? '완료됨' : '완료'}
+                      </button>
                     </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* 🖥️ 데스크탑: 테이블 (⚠️ colgroup 제거, 폭은 th/td에 직접 지정) */}
+            {/* 🖥️ 데스크탑: 테이블 */}
             <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-sm table-fixed">
                 <thead>
@@ -507,7 +598,7 @@ function SchedulesInner() {
                     <th className="p-2 text-left w-[170px]">종료</th>
                     <th className="p-2 text-right w-[140px]">일당</th>
                     <th className="p-2 text-left w-[120px]">상태</th>
-                    <th className="p-2 text-left w-[140px]">액션</th>
+                    <th className="p-2 text-left w-[200px]">액션</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -520,10 +611,19 @@ function SchedulesInner() {
                       <td className="p-2 w-[170px]">{fmtLocal(r.end_ts)}</td>
                       <td className="p-2 text-right w-[140px]">{Number(r.daily_wage || 0).toLocaleString('ko-KR')}</td>
                       <td className="p-2 w-[120px]">{STATUS_LABEL[r.status]}</td>
-                      <td className="p-2 w-[140px]">
+                      <td className="p-2 w-[200px]">
                         <div className="flex flex-wrap gap-2">
                           <Link className="btn h-8 px-3 text-xs" href={`/schedules/${r.id}/edit`}>수정</Link>
                           <button className="btn h-8 px-3 text-xs" onClick={() => onDelete(r.id, r)}>삭제</button>
+                          {/* ✅ 완료 버튼(데스크탑) */}
+                          <button
+                            className="btn h-8 px-3 text-xs"
+                            onClick={() => onComplete(r.id)}
+                            disabled={!!r.completed || r.status === 'done'}
+                            title={r.completed || r.status === 'done' ? '이미 완료됨' : '완료 처리'}
+                          >
+                            {r.completed || r.status === 'done' ? '완료됨' : '완료'}
+                          </button>
                         </div>
                       </td>
                     </tr>

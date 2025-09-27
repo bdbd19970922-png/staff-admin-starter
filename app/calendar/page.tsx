@@ -1,9 +1,8 @@
-// FILE: /app/calendar/page.tsx
+// FILE: app/calendar/page.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-
 import {
   addDays, addMonths, endOfMonth, endOfWeek, format as fmt,
   isSameDay, isSameMonth, startOfMonth, startOfWeek, subMonths,
@@ -12,6 +11,17 @@ import {
 
 /* ✅ 자재 선택 UI 임포트 */
 import MaterialsPicker, { MatLine, MaterialPub, Location } from '@/components/MaterialsPicker';
+
+/* ---------- 세션 준비 대기(Realtime 누락 방지) ---------- */
+async function waitForAuthReady(maxTries = 6, delayMs = 300) {
+  for (let i = 0; i < maxTries; i++) {
+    const { data } = await supabase.auth.getSession();
+    if (data?.session?.access_token) return data.session;
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  const { data } = await supabase.auth.getSession();
+  return data?.session ?? null;
+}
 
 /* ================== 타입 ================== */
 type Row = {
@@ -113,6 +123,22 @@ export default function Page() {
 
   // 직원 마스터 목록
   const [empMasterNames, setEmpMasterNames] = useState<string[]>([]);
+  // 직원 프로필: id ↔ name 매핑
+  const [empProfiles, setEmpProfiles] = useState<ProfileName[]>([]);
+  const nameToId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of empProfiles) {
+      const k = (p.full_name ?? '').trim().toLowerCase();
+      if (k) m.set(k, p.id);
+    }
+    return m;
+  }, [empProfiles]);
+  function findProfileIdByName(name: string | null | undefined) {
+    const k = (name ?? '').trim().toLowerCase();
+    if (!k) return null;
+    return nameToId.get(k) ?? null;
+  }
+
   // 검색어
   const [empSearch, setEmpSearch] = useState<string>('');
   const [empEditSearch, setEmpEditSearch] = useState<string>('');
@@ -267,13 +293,11 @@ export default function Page() {
       const { data, error } = await supabase
         .from('profiles')
         .select('id, full_name')
-        .order('full_name', { ascending: true })
-        .returns<ProfileName[]>();
+        .order('full_name', { ascending: true });
 
-    if (!error && data) {
-        const names = data
-          .map(p => (p.full_name ?? '').trim())
-          .filter(Boolean);
+      if (!error && data) {
+        setEmpProfiles(data as ProfileName[]);
+        const names = (data as any[]).map(p => (p.full_name ?? '').trim()).filter(Boolean);
         setEmpMasterNames(names);
       } else if (error) {
         console.warn('profiles read error:', error.message);
@@ -285,13 +309,33 @@ export default function Page() {
 
   useEffect(() => { load(); }, [isElevated, myName]);
 
-  // Realtime - schedules
+  // ✅ Realtime - schedules (세션 준비 후 구독)
   useEffect(() => {
-    const channel = supabase
-      .channel('calendar-schedules')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'schedules' }, () => load())
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    let ch: ReturnType<typeof supabase.channel> | null = null;
+    (async () => {
+      const sess = await waitForAuthReady();
+      const subscribe = () => {
+        ch = supabase
+          .channel('calendar-schedules')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'schedules' }, (payload) => {
+            console.log('[realtime] schedules change', payload);
+            load();
+          })
+          .subscribe();
+      };
+      if (sess) {
+        subscribe();
+      } else {
+        const sub = supabase.auth.onAuthStateChange((_e, s) => {
+          if (s) {
+            subscribe();
+            sub.data.subscription.unsubscribe();
+          }
+        });
+      }
+    })();
+    return () => { if (ch) supabase.removeChannel(ch); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Realtime - profiles
@@ -467,7 +511,7 @@ export default function Page() {
       customer_name: form.customerName.trim() || null,
       customer_phone: form.customerPhone.trim() || null,
       site_address: form.siteAddress.trim() || null,
-      location: form.siteAddress.trim() || null, // ← 추가: 레거시 컬럼 동기화
+      location: form.siteAddress.trim() || null, // ← 레거시 컬럼 동기화
       revenue: num(form.total),
       material_cost: num(form.material),
       daily_wage: num(form.wage),
@@ -480,6 +524,12 @@ export default function Page() {
     } else {
       fullPayload.employee_name = empNames.length ? legacyEmpName : null;
     }
+    // ★ 단일 선택이면 employee_id도 채워 넣기 (여러 명이면 NULL 유지)
+    fullPayload.employee_id = empNames.length === 1 ? findProfileIdByName(empNames[0]) : null;
+
+    // ★ 단일 선택이면 employee_id도 채워 넣기 (여러 명이면 NULL 유지)
+    fullPayload.employee_id = empNames.length === 1 ? findProfileIdByName(empNames[0]) : null;
+
 
     if (supportsOff) fullPayload.off_day = !!form.offDay;
     else {
@@ -488,28 +538,51 @@ export default function Page() {
       }
     }
 
-    let newScheduleId: string | null = null;
-    let ins1 = await supabase.from('schedules').insert(fullPayload).select('id').single();
-    if (ins1.error) {
+    /* ✅ 변경점 #1: 생성 레코드 전체를 받아서 즉시 반영(낙관 갱신) */
+    const { data: created, error } = await supabase
+      .from('schedules')
+      .insert(fullPayload)
+      .select('id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost')
+      .single();
+
+    if (error) {
+      // (안전) 최소 컬럼으로 재시도
       const safeKeys = ['title','start_ts','end_ts','employee_name','customer_name','customer_phone','site_address','location'];
       const safePayload: Record<string, any> = {};
       for (const k of safeKeys) safePayload[k] = fullPayload[k];
-      const ins2 = await supabase.from('schedules').insert(safePayload).select('id').single();
-      if (ins2.error) {
-        setMsg(`등록 오류: ${ins2.error.message}`);
+      const retry = await supabase
+        .from('schedules')
+        .insert(safePayload)
+        .select('id,title,start_ts,end_ts,employee_id,employee_name,employee_names,off_day,customer_name,customer_phone,site_address,revenue,material_cost,daily_wage,extra_cost')
+        .single();
+
+      if (retry.error) {
+        setMsg(`등록 오류: ${retry.error.message}`);
         setSaving(false);
         setShowAdd({ open:false, date:null });
         return;
-      } else {
-        newScheduleId = String(ins2.data.id);
       }
-    } else {
-      newScheduleId = String(ins1.data.id);
+
+      // ✅ 낙관 갱신
+      setRows(prev => [...prev, mapCreatedToRow(retry.data, supportsMultiEmp, supportsOff, empNames, fullPayload, startISO, endISO)]);
+      try {
+        await afterScheduleCreated(String(retry.data.id), (startISO || '').slice(0,10));
+      } catch (e:any) {
+        console.warn('materials apply failed:', e?.message ?? e);
+        setMsg(`자재 반영 실패: ${e?.message ?? e}`);
+      }
+      setSaving(false);
+      setShowAdd({ open:false, date:null });
+      await load(); // 서버 상태 재동기화
+      return;
     }
+
+    // ✅ 낙관 갱신
+    setRows(prev => [...prev, mapCreatedToRow(created, supportsMultiEmp, supportsOff, empNames, fullPayload, startISO, endISO)]);
 
     try {
       const startDateISO = (startISO || '').slice(0, 10);
-      await afterScheduleCreated(newScheduleId!, startDateISO);
+      await afterScheduleCreated(String(created.id), startDateISO);
     } catch (e: any) {
       console.warn('materials apply failed:', e?.message ?? e);
       setMsg(`자재 반영 실패: ${e?.message ?? e}`);
@@ -517,6 +590,9 @@ export default function Page() {
 
     setSaving(false);
     setShowAdd({ open:false, date:null });
+
+    /* ✅ 변경점 #2: 즉시 보이되, 마지막에 서버 상태로 재동기화 */
+    await load();
   };
 
   /* ====== 선택된 일정 ====== */
@@ -538,7 +614,7 @@ export default function Page() {
     }).sort((a,b) => (a.start_ts ?? '').localeCompare(b.start_ts ?? ''));
   }, [showDay, rows]);
 
-  /* ====== 직원 검색 필터링 ====== */
+  /* ====== 직원 검색 + 클릭 토글 UI용 데이터 ====== */
   const filteredEmpForAdd = useMemo(() => {
     const q = (empSearch ?? '').trim().toLowerCase();
     if (!q) return empNameList;
@@ -619,133 +695,124 @@ export default function Page() {
 
       {/* ▶ 빠른 추가 모달 */}
       {showAdd.open && (
-  <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-    <div
-      className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(760px,94vw)] shadow-2xl flex flex-col"
-      style={{ maxHeight: '85vh' }}
-    >
-      {/* 헤더: 고정 */}
-      <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex items-center justify-between">
-        <div className="text-lg font-bold text-sky-800">일정 추가</div>
-        <button className="text-slate-500 hover:text-slate-800" onClick={() => setShowAdd({open:false, date:null})}>✕</button>
-      </div>
-
-      {/* 본문: 스크롤 */}
-      <div className="flex-1 overflow-y-auto px-5 py-4">
-        {/* === 여기부터 기존 폼 내용을 그대로 붙여넣기 === */}
-        <Field label="작업내용">
-          <input className="input" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="예) 욕실 타일 보수 / 휴무 체크 시 자동 '휴무' 표기" />
-        </Field>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-          <Field label="직원 이름 (여러 명 선택)">
-            <div className="space-y-2">
-              <input
-                className="input"
-                placeholder="직원이름 검색"
-                value={empSearch}
-                onChange={(e) => setEmpSearch(e.target.value)}
-              />
-              <select
-                className="select"
-                multiple
-                size={6}
-                value={form.empNames}
-                onChange={(e) => {
-                  const opts = Array.from(e.target.selectedOptions).map(o => o.value);
-                  setForm(f => ({ ...f, empNames: opts }));
-                }}
-              >
-                {filteredEmpForAdd.map((name) => (<option key={name} value={name}>{name}</option>))}
-              </select>
-              <div className="text-[11px] text-slate-500">※ Ctrl(또는 Cmd) 키로 다중 선택</div>
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div
+            className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(760px,94vw)] shadow-2xl flex flex-col"
+            style={{ maxHeight: '85vh' }}
+          >
+            {/* 헤더: 고정 */}
+            <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex items-center justify-between">
+              <div className="text-lg font-bold text-sky-800">일정 추가</div>
+              <button className="text-slate-500 hover:text-slate-800" onClick={() => setShowAdd({open:false, date:null})}>✕</button>
             </div>
-          </Field>
 
-          <Field label="고객이름">
-            <input className="input" value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} placeholder="예) 박OO" />
-          </Field>
-          <Field label="고객 번호">
-            <input className="input" value={form.customerPhone} onChange={e => setForm(f => ({ ...f, customerPhone: e.target.value }))} placeholder="010-1234-5678" />
-          </Field>
-        </div>
+            {/* 본문: 스크롤 */}
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <Field label="작업내용">
+                <input className="input" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="예) 욕실 타일 보수 / 휴무 체크 시 자동 '휴무' 표기" />
+              </Field>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-          <Field label="현장주소">
-            <input className="input" value={form.siteAddress} onChange={e => setForm(f => ({ ...f, siteAddress: e.target.value }))} placeholder="서울시 ..." />
-          </Field>
-          <Field label="예약시간(시작)">
-            <input type="datetime-local" className="input" value={form.start} onChange={e => setForm(f => ({ ...f, start: e.target.value }))} />
-          </Field>
-          <Field label="휴무">
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={form.offDay}
-                onChange={e => setForm(f => ({ ...f, offDay: e.target.checked }))}
-              />
-              <span className="text-slate-700">해당 일정은 직원 휴무</span>
-            </label>
-          </Field>
-        </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                {/* ✅ 직원 선택(클릭 토글 + 칩) */}
+                <Field label="직원 이름 (여러 명 선택)">
+                  <MultiPick
+                    search={empSearch}
+                    setSearch={setEmpSearch}
+                    options={filteredEmpForAdd}
+                    values={form.empNames}
+                    onToggle={(name) => {
+                      setForm(f => {
+                        const has = f.empNames.includes(name);
+                        return { ...f, empNames: has ? f.empNames.filter(n => n!==name) : [...f.empNames, name] };
+                      });
+                    }}
+                    placeholder="직원이름 검색"
+                  />
+                </Field>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end mt-3">
-          <Field label="총작업비">
-            <input className="input" inputMode="numeric" value={form.total}
-              onChange={e => { const v = int(e.target.value); setForm(f => ({ ...f, total: v, revenue: v })); }}
-              placeholder="예) 500000" />
-          </Field>
-          <div className="md:col-span-2">
-            <button type="button" className="btn mr-2" onClick={() => setDetailsOpen(o => !o)}>
-              {detailsOpen ? '상세 숨기기' : '상세 입력(총매출/자재비/인건비/기타)'}
-            </button>
-            <span className="text-xs text-slate-600">* 총작업비는 총매출(revenue)로 저장됩니다.</span>
+                <Field label="고객이름">
+                  <input className="input" value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} placeholder="예) 박OO" />
+                </Field>
+                <Field label="고객 번호">
+                  <input className="input" value={form.customerPhone} onChange={e => setForm(f => ({ ...f, customerPhone: e.target.value }))} placeholder="010-1234-5678" />
+                </Field>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                <Field label="현장주소">
+                  <input className="input" value={form.siteAddress} onChange={e => setForm(f => ({ ...f, siteAddress: e.target.value }))} placeholder="서울시 ..." />
+                </Field>
+                <Field label="예약시간(시작)">
+                  <input type="datetime-local" className="input" value={form.start} onChange={e => setForm(f => ({ ...f, start: e.target.value }))} />
+                </Field>
+                <Field label="휴무">
+                  <label className="inline-flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={form.offDay}
+                      onChange={e => setForm(f => ({ ...f, offDay: e.target.checked }))}
+                    />
+                    <span className="text-slate-700">해당 일정은 직원 휴무</span>
+                  </label>
+                </Field>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end mt-3">
+                <Field label="총작업비">
+                  <input className="input" inputMode="numeric" value={form.total}
+                    onChange={e => { const v = int(e.target.value); setForm(f => ({ ...f, total: v, revenue: v })); }}
+                    placeholder="예) 500000" />
+                </Field>
+                <div className="md:col-span-2">
+                  <button type="button" className="btn mr-2" onClick={() => setDetailsOpen(o => !o)}>
+                    {detailsOpen ? '상세 숨기기' : '상세 입력(총매출/자재비/인건비/기타)'}
+                  </button>
+                  <span className="text-xs text-slate-600">* 총작업비는 총매출(revenue)로 저장됩니다.</span>
+                </div>
+              </div>
+
+              {detailsOpen && (
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
+                  <Field label="총매출">
+                    <input className="input" inputMode="numeric" value={form.revenue}
+                      onChange={e => { const v = int(e.target.value); setForm(f => ({ ...f, revenue: v, total: v })); }} />
+                  </Field>
+                  <Field label="자재비">
+                    <input className="input" inputMode="numeric" value={form.material}
+                      onChange={e => setForm(f => ({ ...f, material: int(e.target.value) }))} />
+                  </Field>
+                  <Field label="인건비">
+                    <input className="input" inputMode="numeric" value={form.wage}
+                      onChange={e => setForm(f => ({ ...f, wage: int(e.target.value) }))} />
+                  </Field>
+                  <Field label="기타비용">
+                    <input className="input" inputMode="numeric" value={form.extra}
+                      onChange={e => setForm(f => ({ ...f, extra: int(e.target.value) }))} />
+                  </Field>
+                </div>
+              )}
+
+              {/* 자재 선택 영역(기존 그대로) */}
+              <div className="mt-4">
+                <MaterialsPicker
+                  lines={matLines}
+                  setLines={setMatLines}
+                  materials={materials}
+                  locations={locations}
+                />
+              </div>
+            </div>
+
+            {/* 푸터: 고정 (버튼 항상 보임) */}
+            <div className="sticky bottom-0 z-10 border-t border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex justify-end gap-2">
+              <button type="button" className="btn" onClick={() => setShowAdd({open:false, date:null})}>닫기</button>
+              <button type="button" className="btn-primary disabled:opacity-50" disabled={saving} onClick={saveNew}>
+                저장
+              </button>
+            </div>
           </div>
         </div>
-
-        {detailsOpen && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
-            <Field label="총매출">
-              <input className="input" inputMode="numeric" value={form.revenue}
-                onChange={e => { const v = int(e.target.value); setForm(f => ({ ...f, revenue: v, total: v })); }} />
-            </Field>
-            <Field label="자재비">
-              <input className="input" inputMode="numeric" value={form.material}
-                onChange={e => setForm(f => ({ ...f, material: int(e.target.value) }))} />
-            </Field>
-            <Field label="인건비">
-              <input className="input" inputMode="numeric" value={form.wage}
-                onChange={e => setForm(f => ({ ...f, wage: int(e.target.value) }))} />
-            </Field>
-            <Field label="기타비용">
-              <input className="input" inputMode="numeric" value={form.extra}
-                onChange={e => setForm(f => ({ ...f, extra: int(e.target.value) }))} />
-            </Field>
-          </div>
-        )}
-
-        {/* 자재 선택 영역(기존 그대로) */}
-        <div className="mt-4">
-          <MaterialsPicker
-            lines={matLines}
-            setLines={setMatLines}
-            materials={materials}
-            locations={locations}
-          />
-        </div>
-      </div>
-
-      {/* 푸터: 고정 (버튼 항상 보임) */}
-      <div className="sticky bottom-0 z-10 border-t border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex justify-end gap-2">
-        <button type="button" className="btn" onClick={() => setShowAdd({open:false, date:null})}>닫기</button>
-        <button type="button" className="btn-primary disabled:opacity-50" disabled={saving} onClick={saveNew}>
-          저장
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-
+      )}
 
       {/* ▶ 특정 날짜 전체 보기 모달 */}
       {showDay.open && showDay.date && (
@@ -909,7 +976,7 @@ function DetailModal({
       location_id: v.location_id,
       qty: v.qty,
       used_date,
-      schedule_id: scheduleId as any, // 타입 혼용 방지용(프로젝트 스키마에 맞게 동작)
+      schedule_id: scheduleId as any,
     }));
     const { error: insErr } = await supabase.from('material_usages').insert(payload);
     if (insErr) throw insErr;
@@ -935,7 +1002,7 @@ function DetailModal({
       customer_name: edit.customerName.trim() || null,
       customer_phone: edit.customerPhone.trim() || null,
       site_address: edit.siteAddress.trim() || null,
-      location: edit.siteAddress.trim() || null, // ← 추가: 레거시 컬럼 동기화
+      location: edit.siteAddress.trim() || null, // ← 레거시 컬럼 동기화
     };
 
     if (isAdmin) {
@@ -1027,194 +1094,186 @@ function DetailModal({
   };
 
   return (
-  <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-    <div
-      className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] shadow-2xl flex flex-col"
-      style={{ maxHeight: '85vh' }}
-    >
-      {/* 헤더: 고정 */}
-      <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex items-center justify-between">
-        <h2 className="text-lg font-bold text-sky-800">🗂️ 일정 {editing ? '수정' : '상세'}</h2>
-        <button onClick={onClose} className="text-slate-500 hover:text-slate-800">✕</button>
-      </div>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div
+        className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] shadow-2xl flex flex-col"
+        style={{ maxHeight: '85vh' }}
+      >
+        {/* 헤더: 고정 */}
+        <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex items-center justify-between">
+          <h2 className="text-lg font-bold text-sky-800">🗂️ 일정 {editing ? '수정' : '상세'}</h2>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-800">✕</button>
+        </div>
 
-      {/* 본문: 스크롤 영역 */}
-      <div className="flex-1 overflow-y-auto px-5 py-4">
-        {err && (
-          <div className="mb-3 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2">
-            {err}
-          </div>
-        )}
-
-        {!editing ? (
-          <>
-            {/* === 상세 보기 === */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Info label="작업내용" value={row.title || (effectiveOff(row) ? '휴무' : '(제목없음)')} />
-              <Info label="직원" value={effectiveNames(row).join(', ') || '-'} />
-              <Info label="예약시간" value={start ? fmt(start, 'yyyy-MM-dd HH:mm') : '-'} />
-              <Info label="현장주소" value={row.site_address || '-'} />
-              <Info label="고객이름" value={row.customer_name || '-'} />
-              <Info label="고객 번호" value={row.customer_phone || '-'} />
-              <Info label="휴무" value={effectiveOff(row) ? '예' : '아니오'} />
+        {/* 본문: 스크롤 영역 */}
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {err && (
+            <div className="mb-3 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2">
+              {err}
             </div>
+          )}
 
-            {(isAdmin || isManager) && (
-              <div className="mt-4 border-t pt-3">
-                <div className="text-sm font-semibold mb-2">💰 금액 정보</div>
-                {hasFinanceCols === false ? (
-                  <div className="text-sm text-slate-500">테이블에 금액 컬럼이 없어 금액 정보를 표시할 수 없습니다.</div>
-                ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                    <Info label="총매출"  value={moneyText.revenue} />
-                    <Info label="자재비"  value={moneyText.material} />
-                    <Info label="인건비"  value={moneyText.wage} />
-                    <Info label="기타비용" value={moneyText.extra} />
-                    <Info label="순수익"  value={moneyText.net} highlight />
-                  </div>
-                )}
+          {!editing ? (
+            <>
+              {/* === 상세 보기 === */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Info label="작업내용" value={row.title || (effectiveOff(row) ? '휴무' : '(제목없음)')} />
+                <Info label="직원" value={effectiveNames(row).join(', ') || '-'} />
+                <Info label="예약시간" value={start ? fmt(start, 'yyyy-MM-dd HH:mm') : '-'} />
+                <Info label="현장주소" value={row.site_address || '-'} />
+                <Info label="고객이름" value={row.customer_name || '-'} />
+                <Info label="고객 번호" value={row.customer_phone || '-'} />
+                <Info label="휴무" value={effectiveOff(row) ? '예' : '아니오'} />
               </div>
-            )}
-          </>
-        ) : (
-          <>
-            {/* === 수정 폼 === */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <EditField label="작업내용">
-                <input className="input" value={edit.title} onChange={e => setEdit(s => ({ ...s, title: e.target.value }))} />
-              </EditField>
 
-              <EditField label="직원 이름 (여러 명 선택)">
-                <div className="space-y-2">
-                  <input
-                    className="input"
-                    placeholder="직원이름 검색"
-                    value={empEditSearch}
-                    onChange={(e)=>setEmpEditSearch(e.target.value)}
-                  />
-                  <select
-                    className="select"
-                    multiple
-                    size={6}
-                    value={edit.empNames}
-                    onChange={(e) => {
-                      const opts = Array.from(e.target.selectedOptions).map(o => o.value);
-                      setEdit(s => ({ ...s, empNames: opts }));
-                    }}
-                  >
-                    {filteredEmpForEdit.map(name => <option key={name} value={name}>{name}</option>)}
-                  </select>
-                  <div className="text-[11px] text-slate-500">※ Ctrl(또는 Cmd) 키로 다중 선택</div>
+              {(isAdmin || isManager) && (
+                <div className="mt-4 border-t pt-3">
+                  <div className="text-sm font-semibold mb-2">💰 금액 정보</div>
+                  {hasFinanceCols === false ? (
+                    <div className="text-sm text-slate-500">테이블에 금액 컬럼이 없어 금액 정보를 표시할 수 없습니다.</div>
+                  ) : (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                      <Info label="총매출"  value={moneyText.revenue} />
+                      <Info label="자재비"  value={moneyText.material} />
+                      <Info label="인건비"  value={moneyText.wage} />
+                      <Info label="기타비용" value={moneyText.extra} />
+                      <Info label="순수익"  value={moneyText.net} highlight />
+                    </div>
+                  )}
                 </div>
-              </EditField>
+              )}
+            </>
+          ) : (
+            <>
+              {/* === 수정 폼 === */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <EditField label="작업내용">
+                  <input className="input" value={edit.title} onChange={e => setEdit(s => ({ ...s, title: e.target.value }))} />
+                </EditField>
 
-              <EditField label="예약시간">
-                <input type="datetime-local" className="input" value={edit.startLocal} onChange={e => setEdit(s => ({ ...s, startLocal: e.target.value }))} />
-              </EditField>
-              <EditField label="현장주소">
-                <input className="input" value={edit.siteAddress} onChange={e => setEdit(s => ({ ...s, siteAddress: e.target.value }))} />
-              </EditField>
-              <EditField label="고객이름">
-                <input className="input" value={edit.customerName} onChange={e => setEdit(s => ({ ...s, customerName: e.target.value }))} />
-              </EditField>
-              <EditField label="고객 번호">
-                <input className="input" value={edit.customerPhone} onChange={e => setEdit(s => ({ ...s, customerPhone: e.target.value }))} />
-              </EditField>
-
-              <EditField label="휴무">
-                <label className="inline-flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={edit.offDay}
-                    onChange={e => setEdit(s => ({ ...s, offDay: e.target.checked }))}
+                {/* ✅ 직원 선택(클릭 토글 + 칩) */}
+                <EditField label="직원 이름 (여러 명 선택)">
+                  <MultiPick
+                    search={empEditSearch}
+                    setSearch={setEmpEditSearch}
+                    options={filteredEmpForEdit}
+                    values={edit.empNames}
+                    onToggle={(name) => {
+                      setEdit(s => {
+                        const has = s.empNames.includes(name);
+                        return { ...s, empNames: has ? s.empNames.filter(n => n!==name) : [...s.empNames, name] };
+                      });
+                    }}
+                    placeholder="직원이름 검색"
                   />
-                  <span className="text-slate-700">해당 일정은 직원 휴무</span>
-                </label>
-              </EditField>
-            </div>
+                </EditField>
 
-            {isAdmin && (
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-                <EditField label="총매출">
-                  <input className="input" inputMode="numeric" value={edit.revenue ?? 0} onChange={e => setEdit(s => ({ ...s, revenue: int(e.target.value) }))} />
+                <EditField label="예약시간">
+                  <input type="datetime-local" className="input" value={edit.startLocal} onChange={e => setEdit(s => ({ ...s, startLocal: e.target.value }))} />
                 </EditField>
-                <EditField label="자재비(수동)">
-                  <input className="input" inputMode="numeric" value={edit.material_cost ?? 0} onChange={e => setEdit(s => ({ ...s, material_cost: int(e.target.value) }))} />
+                <EditField label="현장주소">
+                  <input className="input" value={edit.siteAddress} onChange={e => setEdit(s => ({ ...s, siteAddress: e.target.value }))} />
                 </EditField>
-                <EditField label="인건비">
-                  <input className="input" inputMode="numeric" value={edit.daily_wage ?? 0} onChange={e => setEdit(s => ({ ...s, daily_wage: int(e.target.value) }))} />
+                <EditField label="고객이름">
+                  <input className="input" value={edit.customerName} onChange={e => setEdit(s => ({ ...s, customerName: e.target.value }))} />
                 </EditField>
-                <EditField label="기타비용">
-                  <input className="input" inputMode="numeric" value={edit.extra_cost ?? 0} onChange={e => setEdit(s => ({ ...s, extra_cost: int(e.target.value) }))} />
+                <EditField label="고객 번호">
+                  <input className="input" value={edit.customerPhone} onChange={e => setEdit(s => ({ ...s, customerPhone: e.target.value }))} />
+                </EditField>
+
+                <EditField label="휴무">
+                  <label className="inline-flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={edit.offDay}
+                      onChange={e => setEdit(s => ({ ...s, offDay: e.target.checked }))}
+                    />
+                    <span className="text-slate-700">해당 일정은 직원 휴무</span>
+                  </label>
                 </EditField>
               </div>
-            )}
 
-            {/* 자재 피커 */}
-            <div className="mt-4">
-              <MaterialsPicker
-                lines={linesEdit}
-                setLines={setLinesEdit}
-                materials={materials}
-                locations={locations}
-              />
-              <p className="text-[11px] text-slate-500 mt-2">
-                저장 시 현재 입력한 자재 사용내역으로 갈아끼우고(기존 내역 삭제), 자재비는 단가×수량으로 자동 반영됩니다.
-              </p>
+              {isAdmin && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <EditField label="총매출">
+                    <input className="input" inputMode="numeric" value={edit.revenue ?? 0} onChange={e => setEdit(s => ({ ...s, revenue: int(e.target.value) }))} />
+                  </EditField>
+                  <EditField label="자재비(수동)">
+                    <input className="input" inputMode="numeric" value={edit.material_cost ?? 0} onChange={e => setEdit(s => ({ ...s, material_cost: int(e.target.value) }))} />
+                  </EditField>
+                  <EditField label="인건비">
+                    <input className="input" inputMode="numeric" value={edit.daily_wage ?? 0} onChange={e => setEdit(s => ({ ...s, daily_wage: int(e.target.value) }))} />
+                  </EditField>
+                  <EditField label="기타비용">
+                    <input className="input" inputMode="numeric" value={edit.extra_cost ?? 0} onChange={e => setEdit(s => ({ ...s, extra_cost: int(e.target.value) }))} />
+                  </EditField>
+                </div>
+              )}
+
+              {/* 자재 피커 */}
+              <div className="mt-4">
+                <MaterialsPicker
+                  lines={linesEdit}
+                  setLines={setLinesEdit}
+                  materials={materials}
+                  locations={locations}
+                />
+                <p className="text-[11px] text-slate-500 mt-2">
+                  저장 시 현재 입력한 자재 사용내역으로 갈아끼우고(기존 내역 삭제), 자재비는 단가×수량으로 자동 반영됩니다.
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 푸터: 고정 */}
+        <div className="sticky bottom-0 z-10 border-t border-slate-100 bg-white/90 backdrop-blur px-5 py-3">
+          {!editing ? (
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={onDelete}
+                disabled={deleting}
+                className="btn border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                title="이 일정을 삭제합니다"
+              >
+                {deleting ? '삭제 중…' : '삭제하기'}
+              </button>
+              <button onClick={() => setEditing(true)} className="btn-primary">수정하기</button>
+              <button onClick={onClose} className="btn">닫기</button>
             </div>
-          </>
-        )}
-      </div>
-
-      {/* 푸터: 고정 */}
-      <div className="sticky bottom-0 z-10 border-t border-slate-100 bg-white/90 backdrop-blur px-5 py-3">
-        {!editing ? (
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={onDelete}
-              disabled={deleting}
-              className="btn border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
-              title="이 일정을 삭제합니다"
-            >
-              {deleting ? '삭제 중…' : '삭제하기'}
-            </button>
-            <button onClick={() => setEditing(true)} className="btn-primary">수정하기</button>
-            <button onClick={onClose} className="btn">닫기</button>
-          </div>
-        ) : (
-          <div className="flex justify-end gap-2">
-            <button onClick={onSave} disabled={saving} className="btn-primary disabled:opacity-50">저장</button>
-            <button
-              onClick={() => {
-                const names = effectiveNames(row);
-                setEdit({
-                  title: row.title ?? '',
-                  empNames: names,
-                  customerName: row.customer_name ?? '',
-                  customerPhone: row.customer_phone ?? '',
-                  siteAddress: row.site_address ?? '',
-                  startLocal: start ? toLocal(start) : toLocal(new Date()),
-                  revenue: num(row.revenue),
-                  material_cost: num(row.material_cost),
-                  daily_wage: num(row.daily_wage),
-                  extra_cost: num(row.extra_cost),
-                  offDay: effectiveOff(row),
-                });
-                setLinesEdit([]);
-                setEmpEditSearch('');
-                setEditing(false);
-              }}
-              className="btn"
-            >
-              취소
-            </button>
-          </div>
-        )}
+          ) : (
+            <div className="flex justify-end gap-2">
+              <button onClick={onSave} disabled={saving} className="btn-primary disabled:opacity-50">저장</button>
+              <button
+                onClick={() => {
+                  const names = effectiveNames(row);
+                  setEdit({
+                    title: row.title ?? '',
+                    empNames: names,
+                    customerName: row.customer_name ?? '',
+                    customerPhone: row.customer_phone ?? '',
+                    siteAddress: row.site_address ?? '',
+                    startLocal: start ? toLocal(start) : toLocal(new Date()),
+                    revenue: num(row.revenue),
+                    material_cost: num(row.material_cost),
+                    daily_wage: num(row.daily_wage),
+                    extra_cost: num(row.extra_cost),
+                    offDay: effectiveOff(row),
+                  });
+                  setLinesEdit([]);
+                  setEmpEditSearch('');
+                  setEditing(false);
+                }}
+                className="btn"
+              >
+                취소
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
-  </div>
-);
-
+  );
 }
 
 /* ---------- 특정 날짜 전체 보기 모달 ---------- */
@@ -1230,70 +1289,69 @@ function DayDetailModal({
   isManager: boolean;
 }) {
   return (
-  <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-    <div
-      className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] shadow-2xl flex flex-col"
-      style={{ maxHeight: '85vh' }}
-    >
-      {/* 헤더: 고정 */}
-      <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex items-center justify-between">
-        <h2 className="text-lg font-bold text-sky-800">📅 {fmt(date, 'yyyy-MM-dd')} 일정({items.length}건)</h2>
-        <button onClick={onClose} className="text-slate-500 hover:text-slate-800">✕</button>
-      </div>
-
-      {/* 본문: 스크롤 */}
-      <div className="flex-1 overflow-y-auto px-5 py-3">
-        <div className="flex justify-between mb-2">
-          <div className="text-sm text-slate-600">해당 날짜의 모든 일정을 한눈에 확인하고 클릭해 상세로 들어갈 수 있어요.</div>
-          <button className="btn" onClick={onAdd}>+ 이 날짜에 추가</button>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div
+        className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white w-[min(860px,94vw)] shadow-2xl flex flex-col"
+        style={{ maxHeight: '85vh' }}
+      >
+        {/* 헤더: 고정 */}
+        <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex items-center justify-between">
+          <h2 className="text-lg font-bold text-sky-800">📅 {fmt(date, 'yyyy-MM-dd')} 일정({items.length}건)</h2>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-800">✕</button>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-slate-200 divide-y">
-          {items.length === 0 && (
-            <div className="p-4 text-sm text-slate-500">등록된 일정이 없습니다.</div>
-          )}
-          {items.map((r) => {
-            const start = r.start_ts ? parseISO(r.start_ts) : null;
-            const net = calcNet(r);
-            const names = effectiveNames(r);
-            const isOff = effectiveOff(r);
-            const isTeam = names.length >= 2;
-            return (
-              <button
-                key={r.id}
-                onClick={() => onView(r.id)}
-                className={`w-full text-left p-3 hover:bg-slate-50 relative ${isOff ? 'border border-rose-400 rounded-lg' : ''}`}
-                title="클릭하여 상세 보기"
-              >
-                {isTeam && <span className="absolute left-0 top-0 h-full w-1 bg-sky-500 rounded-l-md" />}
-                <div className="flex items-center justify-between">
-                  <div className="font-medium text-slate-800 truncate">
-                    {r.title ?? (isOff ? '휴무' : '(제목없음)')}
+        {/* 본문: 스크롤 */}
+        <div className="flex-1 overflow-y-auto px-5 py-3">
+          <div className="flex justify-between mb-2">
+            <div className="text-sm text-slate-600">해당 날짜의 모든 일정을 한눈에 확인하고 클릭해 상세로 들어갈 수 있어요.</div>
+            <button className="btn" onClick={onAdd}>+ 이 날짜에 추가</button>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-slate-200 divide-y">
+            {items.length === 0 && (
+              <div className="p-4 text-sm text-slate-500">등록된 일정이 없습니다.</div>
+            )}
+            {items.map((r) => {
+              const start = r.start_ts ? parseISO(r.start_ts) : null;
+              const net = calcNet(r);
+              const names = effectiveNames(r);
+              const isOff = effectiveOff(r);
+              const isTeam = names.length >= 2;
+              return (
+                <button
+                  key={r.id}
+                  onClick={() => onView(r.id)}
+                  className={`w-full text-left p-3 hover:bg-slate-50 relative ${isOff ? 'border border-rose-400 rounded-lg' : ''}`}
+                  title="클릭하여 상세 보기"
+                >
+                  {isTeam && <span className="absolute left-0 top-0 h-full w-1 bg-sky-500 rounded-l-md" />}
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium text-slate-800 truncate">
+                      {r.title ?? (isOff ? '휴무' : '(제목없음)')}
+                    </div>
+                    <div className="text-xs text-slate-500">{start ? fmt(start,'HH:mm') : '-'}</div>
                   </div>
-                  <div className="text-xs text-slate-500">{start ? fmt(start,'HH:mm') : '-'}</div>
-                </div>
-                <div className="mt-1 text-xs text-slate-600 flex gap-2 flex-wrap">
-                  {names.length > 0 && <span>👤 {names.join(', ')}</span>}
-                  {r.site_address && <span>📍 {r.site_address}</span>}
-                  {r.customer_name && <span>🙍 {r.customer_name}</span>}
-                  {isAdmin && net != null && <span className="font-semibold text-amber-700">💰 순익 {formatKRW(net)}</span>}
-                  {isManager && net != null && !isAdmin && <span className="font-semibold text-amber-700">💰 순익 ***</span>}
-                  {isOff && <span className="text-rose-600 font-semibold">⛔ 휴무</span>}
-                </div>
-              </button>
-            );
-          })}
+                  <div className="mt-1 text-xs text-slate-600 flex gap-2 flex-wrap">
+                    {names.length > 0 && <span>👤 {names.join(', ')}</span>}
+                    {r.site_address && <span>📍 {r.site_address}</span>}
+                    {r.customer_name && <span>🙍 {r.customer_name}</span>}
+                    {isAdmin && net != null && <span className="font-semibold text-amber-700">💰 순익 {formatKRW(net)}</span>}
+                    {isManager && net != null && !isAdmin && <span className="font-semibold text-amber-700">💰 순익 ***</span>}
+                    {isOff && <span className="text-rose-600 font-semibold">⛔ 휴무</span>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
 
-      {/* 푸터: 고정 */}
-      <div className="sticky bottom-0 z-10 border-t border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex justify-end">
-        <button className="btn" onClick={onClose}>닫기</button>
+        {/* 푸터: 고정 */}
+        <div className="sticky bottom-0 z-10 border-t border-slate-100 bg-white/90 backdrop-blur px-5 py-3 flex justify-end">
+          <button className="btn" onClick={onClose}>닫기</button>
+        </div>
       </div>
     </div>
-  </div>
-);
-
+  );
 }
 
 /* ---------- 공통 소형 컴포넌트 ---------- */
@@ -1319,6 +1377,66 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div className="text-sm text-slate-600 mb-1">{label}</div>
       {children}
     </label>
+  );
+}
+
+/* ✅ 직원 클릭-토글 + 칩 컴포넌트 */
+function MultiPick({
+  search, setSearch, options, values, onToggle, placeholder,
+}: {
+  search: string; setSearch: (v: string) => void;
+  options: string[];
+  values: string[];
+  onToggle: (name: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <input
+        className="input"
+        placeholder={placeholder ?? '검색'}
+        value={search}
+        onChange={(e)=>setSearch(e.target.value)}
+      />
+      {/* 선택된 칩 */}
+      <div className="flex flex-wrap gap-2 min-h-[36px] p-2 rounded border border-slate-200 bg-slate-50/50">
+        {values.length === 0 ? (
+          <span className="text-[12px] text-slate-500">선택된 직원 없음</span>
+        ) : values.map((v) => (
+          <button
+            key={v}
+            onClick={()=>onToggle(v)}
+            className="text-xs px-2 py-1 rounded-full border bg-sky-50 border-sky-200 text-sky-800 hover:bg-sky-100"
+            title="클릭하면 제거됩니다"
+            type="button"
+          >
+            {v} ✕
+          </button>
+        ))}
+      </div>
+      {/* 클릭 리스트 */}
+      <div className="max-h-40 overflow-auto rounded border border-slate-200 divide-y">
+        {options.length === 0 && (
+          <div className="p-2 text-[12px] text-slate-500">검색 결과 없음</div>
+        )}
+        {options.map((name) => {
+          const sel = values.includes(name);
+          return (
+            <button
+              key={name}
+              type="button"
+              onClick={()=>onToggle(name)}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${
+                sel ? 'bg-sky-50 text-sky-800' : 'bg-white'
+              }`}
+              title={sel ? '클릭하면 선택 해제' : '클릭하면 선택'}
+            >
+              {sel ? '✓ ' : ''}{name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -1553,4 +1671,33 @@ function effectiveOff(r: Row): boolean {
   const t = (r.title ?? '').trim();
   if (!t) return false;
   return t === '휴무' || t.startsWith('휴무 ') || t.startsWith('휴무-') || t.startsWith('[휴무]');
+}
+
+/* ---------- 생성 레코드 → Row 매핑 (낙관 갱신용) ---------- */
+function mapCreatedToRow(
+  created: any,
+  supportsMultiEmp: boolean,
+  supportsOff: boolean,
+  empNames: string[],
+  fullPayload: Record<string, any>,
+  startISO: string,
+  endISO: string
+): Row {
+  return {
+    id: created.id,
+    title: created.title ?? fullPayload.title ?? null,
+    start_ts: created.start_ts ?? startISO,
+    end_ts: created.end_ts ?? endISO,
+    employee_id: created.employee_id ?? null,
+    employee_name: created.employee_name ?? (supportsMultiEmp ? null : (empNames.join(', ') || null)),
+    employee_names: created.employee_names ?? (supportsMultiEmp ? empNames : null),
+    off_day: typeof created.off_day === 'boolean' ? created.off_day : (supportsOff ? !!fullPayload.off_day : null),
+    customer_name: created.customer_name ?? fullPayload.customer_name ?? null,
+    customer_phone: created.customer_phone ?? fullPayload.customer_phone ?? null,
+    site_address: created.site_address ?? fullPayload.site_address ?? null,
+    revenue: created.revenue ?? fullPayload.revenue ?? null,
+    material_cost: created.material_cost ?? fullPayload.material_cost ?? null,
+    daily_wage: created.daily_wage ?? fullPayload.daily_wage ?? null,
+    extra_cost: created.extra_cost ?? fullPayload.extra_cost ?? null,
+  };
 }
