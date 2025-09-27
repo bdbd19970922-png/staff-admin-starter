@@ -72,7 +72,7 @@ export default function Page() {
   const [rows, setRows] = useState<Row[]>([]);
   const [msg, setMsg] = useState<string|null>(null);
   const [loading, setLoading] = useState(true);
-
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedEmp, setSelectedEmp] = useState<string>('all');
 
   // 빠른 추가 모달
@@ -213,15 +213,15 @@ export default function Page() {
   const gridEnd    = endOfWeek(monthEnd);
 
   /* ====== 데이터 로드 ====== */
-  const load = async () => {
-    setLoading(true);
+  const load = async (opts?: { initial?: boolean }) => {
+    if (opts?.initial) { setLoading(true); } else { setRefreshing(true); }
     setMsg(null);
 
     try {
       const me = (myName ?? '').trim();
       if (!isElevated && !me) {
         setRows([]);
-        setLoading(false);
+        if (opts?.initial) { setLoading(false); } else { setRefreshing(false); }
         return;
       }
 
@@ -307,7 +307,7 @@ export default function Page() {
     }
   };
 
-  useEffect(() => { load(); }, [isElevated, myName]);
+  useEffect(() => { load({ initial: true }); }, [isElevated, myName]);
 
   // ✅ Realtime - schedules (세션 준비 후 구독)
   useEffect(() => {
@@ -319,7 +319,7 @@ export default function Page() {
           .channel('calendar-schedules')
           .on('postgres_changes', { event: '*', schema: 'public', table: 'schedules' }, (payload) => {
             console.log('[realtime] schedules change', payload);
-            load();
+            load({ initial: false });
           })
           .subscribe();
       };
@@ -527,9 +527,6 @@ export default function Page() {
     // ★ 단일 선택이면 employee_id도 채워 넣기 (여러 명이면 NULL 유지)
     fullPayload.employee_id = empNames.length === 1 ? findProfileIdByName(empNames[0]) : null;
 
-    // ★ 단일 선택이면 employee_id도 채워 넣기 (여러 명이면 NULL 유지)
-    fullPayload.employee_id = empNames.length === 1 ? findProfileIdByName(empNames[0]) : null;
-
 
     if (supportsOff) fullPayload.off_day = !!form.offDay;
     else {
@@ -573,7 +570,7 @@ export default function Page() {
       }
       setSaving(false);
       setShowAdd({ open:false, date:null });
-      await load(); // 서버 상태 재동기화
+      await load({ initial: false }); // 서버 상태 재동기화
       return;
     }
 
@@ -592,7 +589,7 @@ export default function Page() {
     setShowAdd({ open:false, date:null });
 
     /* ✅ 변경점 #2: 즉시 보이되, 마지막에 서버 상태로 재동기화 */
-    await load();
+    await load({ initial: false });
   };
 
   /* ====== 선택된 일정 ====== */
@@ -649,7 +646,7 @@ export default function Page() {
             <select className="select" value={selectedEmp} onChange={e => setSelectedEmp(e.target.value)}>
               {empOptions.map(o => (<option key={o.key} value={o.key}>{o.label}</option>))}
             </select>
-            <button className="btn" onClick={load}>새로고침</button>
+            <button className="btn" onClick={() => load({ initial: false })}>새로고침</button>
           </div>
         </div>
       </div>
@@ -658,10 +655,13 @@ export default function Page() {
 
       {/* 달력 */}
       <section className="rounded-2xl border border-sky-100 ring-1 ring-sky-100/70 bg-white shadow-[0_6px_16px_rgba(2,132,199,0.08)] overflow-hidden">
-        {loading ? (
+        {loading && rows.length === 0 ? (
           <div className="p-6 text-sm text-slate-600">불러오는 중…</div>
         ) : (
           <>
+            {refreshing && (
+              <div className="px-3 py-1 text-[11px] text-slate-600">동기화 중…</div>
+            )}
             {/* 📱 모바일: Agenda 리스트(가독성 ↑) */}
             <div className="sm:hidden">
               <MonthAgendaMobile

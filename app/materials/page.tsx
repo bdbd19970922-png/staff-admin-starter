@@ -33,8 +33,8 @@ export default function MaterialsPage() {
             .eq('id', uid)
             .maybeSingle();
 
-        dbAdmin = !!me?.is_admin;
-        dbManager = !!me?.is_manager;
+          dbAdmin = !!me?.is_admin;
+          dbManager = !!me?.is_manager;
         }
 
         setIsAdmin(envAdmin || dbAdmin);
@@ -181,7 +181,7 @@ function MaterialsInner() {
           supabase
             .from('materials')
             .select('id,name,vendor,unit_price')
-            .eq('deleted', false)                 // 🔹 소프트 삭제 필터 추가
+            .eq('deleted', false)                 // 🔹 소프트 삭제 필터
             .order('name', { ascending: true })
             .returns<Material[]>(),
           supabase
@@ -218,7 +218,13 @@ function MaterialsInner() {
         .order('location_name', { ascending: true })
         .returns<StockRow[]>();
       if (error) throw error;
-      setStock(data ?? []);
+
+      // 🔹 소프트 삭제된 자재는 재고현황에서 숨김
+      //    (materialsFull은 deleted=false만 담겨 있음)
+      const activeIds = new Set(materialsFull.map(m => m.id));
+      const filtered = (data ?? []).filter(r => activeIds.has(r.material_id));
+
+      setStock(filtered);
     } catch (e: any) {
       setMsg(`재고 로드 실패: ${e.message || e}`);
     } finally {
@@ -266,6 +272,7 @@ function MaterialsInner() {
     setMatVendor('');
     setMatPrice('');
     await loadBase();
+    await loadStock();
     setMsg('자재 등록 완료');
   }
 
@@ -295,11 +302,12 @@ function MaterialsInner() {
     if (error) { setMsg(`수정 실패: ${error.message}`); return; }
     setEditId(null);
     await loadBase();
+    await loadStock();
     setMsg('수정 완료');
   }
   async function deleteMaterial(id: string) {
     if (!confirm('이 자재를 숨길까요? (연결된 입고/사용 기록은 보존됩니다)')) return;
-    // 🔹 하드 삭제 → 소프트 삭제로 변경
+    // 🔹 하드 삭제 → 소프트 삭제
     const { error } = await supabase
       .from('materials')
       .update({ deleted: true })
